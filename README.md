@@ -4,7 +4,7 @@
 Perplexity and Google AI Overviews can reach, read, index and quote it — then hands you the exact
 lines to change when they cannot.
 
-Live scan, no signup. 20+ checks across 6 weighted categories, 16 AI agents evaluated against your
+Live scan, no signup. 31 checks across 6 weighted categories, 16 AI agents evaluated against your
 real `robots.txt`.
 
 ```

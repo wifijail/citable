@@ -114,7 +114,7 @@ export default function HomePage() {
         <section id="how-it-works" className="container-page py-12">
           <div className="mx-auto max-w-2xl text-center">
             <h2 className="text-3xl font-bold text-white sm:text-4xl">
-              Six categories, {CATEGORIES.length > 0 ? '20+' : ''} checks, one score
+              Six categories, 31 checks, one score
             </h2>
             <p className="mt-3 text-slate-400">
               Each category is weighted by how much it actually moves the odds of being quoted.
