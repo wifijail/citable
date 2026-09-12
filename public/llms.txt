@@ -1,0 +1,19 @@
+# Citable
+
+> Citable audits whether AI assistants (ChatGPT, Claude, Perplexity, Google AI Overviews)
+> can reach, read, index and cite a given web page, and returns the exact fixes for what
+> is blocking them. Free scan, no signup.
+
+## Core pages
+- [Scanner and overview](https://citable.dev/): run a free AI-visibility audit on any URL
+- [API documentation](https://citable.dev/docs): POST /api/v1/scan, CI deploy gates, scoring model
+- [Pricing](https://citable.dev/#pricing): Free, Pro ($19/mo), Agency ($79/mo), Lifetime ($149)
+
+## What the audit covers
+- AI crawler access: robots.txt evaluated against 16 AI agents, separating live-retrieval
+  agents (ChatGPT-User, Claude-User, Perplexity-User) from training crawlers (GPTBot, CCBot)
+- Machine readability: server-rendered content, client-side-rendering risk, llms.txt, sitemap
+- Structured data: JSON-LD entities, authorship, datePublished/dateModified, FAQPage markup
+- Answerability: heading structure, question-shaped headings, lists and tables, paragraph density
+- Metadata and identity: title, description, canonical, Open Graph, declared language
+- Technical health: HTTP status, HTTPS, response time, redirect chain, payload size, image alt text
