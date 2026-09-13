@@ -1,89 +1,63 @@
+/**
+ * Pricing — the single source of truth for what the site DISPLAYS.
+ *
+ * Important: the amount a customer is actually charged is whatever you configure
+ * on the product in Lemon Squeezy / Stripe. If you change a price here, change it
+ * there too, otherwise the page and the checkout will disagree.
+ */
+
 export type PlanId = 'free' | 'pro' | 'agency' | 'lifetime';
+export type PaidPlanId = Exclude<PlanId, 'free'>;
+export type AccessPlan = 'free' | 'pro' | 'agency';
 
 export interface PlanDefinition {
   id: PlanId;
-  name: string;
-  price: string;
-  cadence: string;
-  tagline: string;
-  features: string[];
-  cta: string;
+  /** Price in whole US dollars. */
+  priceUsd: number;
+  billing: 'forever' | 'monthly' | 'once';
   highlighted?: boolean;
-  /** Env var holding the Stripe Price id. Absent for the free plan. */
-  priceEnv?: string;
-  /** Plan granted by the license key issued after payment. */
-  grants?: 'pro' | 'agency';
+  /** Access level unlocked by a license bought on this plan. */
+  grants: AccessPlan;
+  /** Env vars holding the provider's product identifiers. */
+  stripePriceEnv?: string;
+  lemonVariantEnv?: string;
 }
 
 export const PLANS: readonly PlanDefinition[] = [
-  {
-    id: 'free',
-    name: 'Free',
-    price: '$0',
-    cadence: 'forever',
-    tagline: 'Find out where you stand.',
-    cta: 'Run a free scan',
-    features: [
-      '5 scans per day',
-      'Full AI Visibility Score and category breakdown',
-      'All 16 AI crawlers checked against your robots.txt',
-      'Top 3 fixes with full instructions',
-    ],
-  },
+  { id: 'free', priceUsd: 0, billing: 'forever', grants: 'free' },
   {
     id: 'pro',
-    name: 'Pro',
-    price: '$19',
-    cadence: 'per month',
-    tagline: 'For the person responsible for the traffic.',
-    cta: 'Upgrade to Pro',
+    priceUsd: 7,
+    billing: 'monthly',
     highlighted: true,
-    priceEnv: 'STRIPE_PRICE_PRO_MONTHLY',
     grants: 'pro',
-    features: [
-      'Unlimited scans',
-      'Every fix unlocked, with copy-paste snippets',
-      'Full evidence trail for each check',
-      'JSON and CSV export',
-      'API access for CI pipelines',
-    ],
+    stripePriceEnv: 'STRIPE_PRICE_PRO_MONTHLY',
+    lemonVariantEnv: 'LEMONSQUEEZY_VARIANT_PRO',
   },
   {
     id: 'agency',
-    name: 'Agency',
-    price: '$79',
-    cadence: 'per month',
-    tagline: 'Sell AI visibility audits as a service.',
-    cta: 'Upgrade to Agency',
-    priceEnv: 'STRIPE_PRICE_AGENCY_MONTHLY',
+    priceUsd: 19,
+    billing: 'monthly',
     grants: 'agency',
-    features: [
-      'Everything in Pro',
-      'White-label reports for client delivery',
-      'Up to 25 tracked sites',
-      'Priority rate limits',
-      'Email support',
-    ],
+    stripePriceEnv: 'STRIPE_PRICE_AGENCY_MONTHLY',
+    lemonVariantEnv: 'LEMONSQUEEZY_VARIANT_AGENCY',
   },
   {
     id: 'lifetime',
-    name: 'Lifetime',
-    price: '$149',
-    cadence: 'one-time',
-    tagline: 'Launch offer — first 100 customers.',
-    cta: 'Buy lifetime access',
-    priceEnv: 'STRIPE_PRICE_LIFETIME',
+    priceUsd: 49,
+    billing: 'once',
     grants: 'pro',
-    features: [
-      'Everything in Pro, forever',
-      'All future Pro features included',
-      'No subscription to manage',
-    ],
+    stripePriceEnv: 'STRIPE_PRICE_LIFETIME',
+    lemonVariantEnv: 'LEMONSQUEEZY_VARIANT_LIFETIME',
   },
 ] as const;
 
 export function findPlan(id: string): PlanDefinition | undefined {
   return PLANS.find((plan) => plan.id === id);
+}
+
+export function isPaidPlan(id: string): id is PaidPlanId {
+  return id === 'pro' || id === 'agency' || id === 'lifetime';
 }
 
 /**

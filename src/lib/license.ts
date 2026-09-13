@@ -1,94 +1,64 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 /**
- * Stateless licensing.
+ * License keys: `CITE-<PLAN>-<ID>-<SIGNATURE>`.
  *
- * A key is `CITE-<PLAN>-<PAYLOAD>-<SIGNATURE>`, where the signature is an HMAC of
- * the payload under LICENSE_SECRET. Verification is a local hash comparison, so
- * paid access needs no database, no session store and no per-request round trip —
- * which is what keeps the marginal cost of a customer at zero.
+ * ID is 10 random bytes; SIGNATURE is an HMAC-SHA256 of `PLAN-ID` under
+ * LICENSE_SECRET (96 bits kept). The signature lets any server reject forged or
+ * mistyped keys instantly, without touching the database.
  *
- * Revocation is the deliberate trade-off: to invalidate keys you rotate the secret.
- * For a $19/month tool that is the right side of the complexity line.
+ * Whether a *valid-looking* key still grants access (subscription cancelled,
+ * refunded, expired…) is decided by the licenses table — see `lib/access.ts`.
  */
 
 export type Plan = 'free' | 'pro' | 'agency';
 
 export interface LicenseInfo {
-  plan: Plan;
-  /** Opaque customer reference (Stripe customer id or hashed email). */
-  reference: string;
-  issuedAt: number;
+  plan: Exclude<Plan, 'free'>;
+  id: string;
 }
 
 const PREFIX = 'CITE';
+const SIGNATURE_HEX = 24;
 
-function secret(): string {
-  const value = process.env.LICENSE_SECRET;
-  if (!value || value.length < 8) {
-    // Deliberately unusable fallback: without a real secret, no key can verify.
-    return '';
-  }
-  return value;
+export function licenseSecret(): string | null {
+  const value = process.env.LICENSE_SECRET?.trim();
+  // Deliberately refuse short secrets: without a real one, no key can be issued or verified.
+  return value && value.length >= 16 ? value : null;
 }
 
-function sign(payload: string): string {
-  return createHmac('sha256', secret()).update(payload).digest('hex').slice(0, 32).toUpperCase();
+function sign(body: string, secret: string): string {
+  return createHmac('sha256', secret).update(body).digest('hex').slice(0, SIGNATURE_HEX).toUpperCase();
 }
 
-// Hex, not base64url: keys are printed, spoken and pasted in upper case, and
-// base64url would both lose information on case-folding and collide with the
-// `-` separator used in the key format.
-function encodePayload(info: Omit<LicenseInfo, 'plan'>): string {
-  return Buffer.from(`${info.reference}:${info.issuedAt}`, 'utf8')
-    .toString('hex')
-    .toUpperCase();
+export function issueLicense(plan: Exclude<Plan, 'free'>): string {
+  const secret = licenseSecret();
+  if (!secret) throw new Error('LICENSE_SECRET is not configured (min. 16 characters).');
+  const body = `${plan.toUpperCase()}-${randomBytes(10).toString('hex').toUpperCase()}`;
+  return `${PREFIX}-${body}-${sign(body, secret)}`;
 }
 
-function decodePayload(encoded: string): Omit<LicenseInfo, 'plan'> | null {
-  try {
-    if (!/^[0-9A-F]+$/i.test(encoded) || encoded.length % 2 !== 0) return null;
-    const decoded = Buffer.from(encoded, 'hex').toString('utf8');
-    const separator = decoded.lastIndexOf(':');
-    if (separator === -1) return null;
-    const reference = decoded.slice(0, separator);
-    const issuedAt = Number.parseInt(decoded.slice(separator + 1), 10);
-    if (!reference || !Number.isFinite(issuedAt)) return null;
-    return { reference, issuedAt };
-  } catch {
-    return null;
-  }
-}
-
-export function issueLicense(plan: Exclude<Plan, 'free'>, reference: string): string {
-  if (!secret()) throw new Error('LICENSE_SECRET is not configured.');
-  const payload = encodePayload({ reference, issuedAt: Date.now() });
-  const body = `${plan.toUpperCase()}-${payload}`;
-  return `${PREFIX}-${body}-${sign(body)}`;
+/** Normalises what a human pasted: trims, upper-cases, drops inner spaces. */
+export function normalizeLicenseKey(key: string): string {
+  return key.trim().toUpperCase().replace(/\s+/g, '');
 }
 
 export function verifyLicense(key: string | null | undefined): LicenseInfo | null {
-  if (!key || !secret()) return null;
+  const secret = licenseSecret();
+  if (!key || !secret) return null;
 
-  const parts = key.trim().toUpperCase().split('-');
+  const parts = normalizeLicenseKey(key).split('-');
   if (parts.length !== 4) return null;
-  const [prefix, planPart, payload, signature] = parts;
-  if (prefix !== PREFIX || !planPart || !payload || !signature) return null;
+  const [prefix, planPart, id, signature] = parts;
+  if (prefix !== PREFIX || !planPart || !id || !signature) return null;
+  // Strict hex checks also guarantee equal byte lengths for timingSafeEqual below.
+  if (!/^[0-9A-F]{20}$/.test(id) || !/^[0-9A-F]{24}$/.test(signature)) return null;
 
   const plan = planPart.toLowerCase();
   if (plan !== 'pro' && plan !== 'agency') return null;
 
-  const expected = sign(`${planPart}-${payload}`);
-  if (expected.length !== signature.length) return null;
+  const expected = sign(`${planPart}-${id}`, secret);
   if (!timingSafeEqual(Buffer.from(expected), Buffer.from(signature))) return null;
 
-  const decoded = decodePayload(payload);
-  if (!decoded) return null;
-
-  return { plan, reference: decoded.reference, issuedAt: decoded.issuedAt };
-}
-
-/** Resolves the effective plan for a request, from a header or a cookie. */
-export function planFromKey(key: string | null | undefined): Plan {
-  return verifyLicense(key)?.plan ?? 'free';
+  return { plan, id };
 }

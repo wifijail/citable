@@ -1,10 +1,11 @@
 /**
- * Per-IP daily quota for free scans.
+ * Small in-memory fixed-window limiter for low-stakes endpoints (lead capture,
+ * contact form, license claim polling) and the scan quota when no database is
+ * configured.
  *
- * Intentionally in-memory: on Vercel each serverless instance keeps its own
- * counter, which is imperfect but costs nothing and is enough to stop casual
- * abuse of an endpoint that only makes three outbound GET requests. Swap the
- * two functions below for Upstash Redis when volume justifies it.
+ * On Vercel each serverless instance keeps its own counters, so limits are
+ * approximate. That is acceptable for abuse damping; anything that must be exact
+ * (the free scan quota) is counted in Postgres instead — see `lib/access.ts`.
  */
 
 interface Bucket {
@@ -13,7 +14,6 @@ interface Bucket {
 }
 
 const buckets = new Map<string, Bucket>();
-const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_TRACKED_KEYS = 10_000;
 
 export interface QuotaResult {
@@ -23,11 +23,6 @@ export interface QuotaResult {
   resetAt: number;
 }
 
-function dailyLimit(): number {
-  const parsed = Number.parseInt(process.env.FREE_DAILY_SCAN_LIMIT ?? '', 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 5;
-}
-
 function evictExpired(now: number): void {
   for (const [key, bucket] of buckets) {
     if (bucket.resetAt <= now) buckets.delete(key);
@@ -35,14 +30,16 @@ function evictExpired(now: number): void {
   if (buckets.size > MAX_TRACKED_KEYS) buckets.clear();
 }
 
-export function consumeQuota(identifier: string, limitOverride?: number): QuotaResult {
-  const limit = limitOverride ?? dailyLimit();
+export function consumeQuota(
+  identifier: string,
+  limit: number,
+  windowMs = 24 * 60 * 60 * 1000,
+): QuotaResult {
   const now = Date.now();
   evictExpired(now);
 
   const existing = buckets.get(identifier);
-  const bucket =
-    existing && existing.resetAt > now ? existing : { count: 0, resetAt: now + DAY_MS };
+  const bucket = existing && existing.resetAt > now ? existing : { count: 0, resetAt: now + windowMs };
 
   if (bucket.count >= limit) {
     buckets.set(identifier, bucket);
@@ -51,20 +48,5 @@ export function consumeQuota(identifier: string, limitOverride?: number): QuotaR
 
   bucket.count++;
   buckets.set(identifier, bucket);
-  return {
-    allowed: true,
-    remaining: Math.max(0, limit - bucket.count),
-    limit,
-    resetAt: bucket.resetAt,
-  };
-}
-
-/** Best-effort client identity behind Vercel's proxy. */
-export function clientIdentifier(headers: Headers): string {
-  const forwarded = headers.get('x-forwarded-for');
-  if (forwarded) {
-    const first = forwarded.split(',')[0]?.trim();
-    if (first) return first;
-  }
-  return headers.get('x-real-ip') ?? headers.get('cf-connecting-ip') ?? 'anonymous';
+  return { allowed: true, remaining: Math.max(0, limit - bucket.count), limit, resetAt: bucket.resetAt };
 }

@@ -1,22 +1,24 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { InvalidTargetError, runAudit } from '@/lib/audit';
-import { verifyLicense } from '@/lib/license';
-import { clientIdentifier, consumeQuota } from '@/lib/ratelimit';
+import { getAuditMessages } from '@/i18n/audit';
+import { resolveAccess } from '@/lib/access';
+import { describeTargetError, InvalidTargetError, runAudit } from '@/lib/audit';
+import { readJson, requestLocale } from '@/lib/http';
+import { consumeQuota } from '@/lib/ratelimit';
 
 export const runtime = 'nodejs';
 export const maxDuration = 30;
 
 const BodySchema = z.object({
-  url: z.string().min(3).max(2048),
+  url: z.string().min(1).max(2048),
   /** Optional CI gate: respond 422 when the score drops below this threshold. */
   minScore: z.number().min(0).max(100).optional(),
+  /** Language of the findings: en, ru, es or de. */
+  lang: z.string().max(5).optional(),
 });
 
 function bearer(request: Request): string | null {
-  const header = request.headers.get('authorization');
-  if (!header) return null;
-  const match = /^Bearer\s+(.+)$/i.exec(header.trim());
+  const match = /^Bearer\s+(.+)$/i.exec(request.headers.get('authorization')?.trim() ?? '');
   return match?.[1] ?? null;
 }
 
@@ -27,65 +29,40 @@ export function OPTIONS(): Response {
 /**
  * Public API for CI pipelines.
  *
- *   curl -X POST https://citable.dev/api/v1/scan \
+ *   curl -X POST https://<your-domain>/api/v1/scan \
  *     -H "Authorization: Bearer $CITABLE_KEY" \
  *     -H "Content-Type: application/json" \
  *     -d '{"url":"https://example.com","minScore":70}'
  */
 export async function POST(request: Request): Promise<Response> {
-  const key = bearer(request);
-  const license = verifyLicense(key);
-
-  if (!license) {
+  const access = await resolveAccess(bearer(request));
+  if (access.plan === 'free') {
     return NextResponse.json(
-      {
-        error: 'A valid API key is required. Get one at /pricing.',
-        code: 'unauthorized',
-      },
+      { error: access.keyProblem === 'inactive' ? 'license_inactive' : 'unauthorized' },
       { status: 401 },
     );
   }
 
-  let payload: unknown;
-  try {
-    payload = await request.json();
-  } catch {
-    return NextResponse.json({ error: 'Expected a JSON body.' }, { status: 400 });
-  }
+  const body = await readJson(request, BodySchema);
+  if (body.error) return body.error;
 
-  const parsed = BodySchema.safeParse(payload);
-  if (!parsed.success) {
-    return NextResponse.json(
-      { error: 'Provide a "url" and an optional numeric "minScore".' },
-      { status: 400 },
-    );
-  }
-
-  // Generous but non-zero ceiling so one key cannot be shared across a whole agency.
+  // Generous but finite, so one key cannot be shared across a whole agency.
   const quota = consumeQuota(
-    `api:${license.reference}:${clientIdentifier(request.headers)}`,
-    license.plan === 'agency' ? 2000 : 500,
+    `api:${access.license?.id ?? bearer(request)}`,
+    access.plan === 'agency' ? 2000 : 500,
   );
   if (!quota.allowed) {
-    return NextResponse.json(
-      { error: 'Daily API quota exceeded.', code: 'quota_exceeded' },
-      { status: 429 },
-    );
+    return NextResponse.json({ error: 'quota_exceeded' }, { status: 429 });
   }
 
+  const locale = requestLocale(request, body.data.lang ?? 'en');
   try {
-    const report = await runAudit(parsed.data.url, license.plan);
-    const failsGate =
-      parsed.data.minScore !== undefined && report.score < parsed.data.minScore;
+    const report = await runAudit(body.data.url, access.plan, locale);
+    const minScore = body.data.minScore;
+    const failsGate = minScore !== undefined && report.score < minScore;
 
     return NextResponse.json(
-      {
-        ...report,
-        gate:
-          parsed.data.minScore === undefined
-            ? undefined
-            : { minScore: parsed.data.minScore, passed: !failsGate },
-      },
+      { ...report, gate: minScore === undefined ? undefined : { minScore, passed: !failsGate } },
       {
         status: failsGate ? 422 : 200,
         headers: {
@@ -97,9 +74,12 @@ export async function POST(request: Request): Promise<Response> {
     );
   } catch (error) {
     if (error instanceof InvalidTargetError) {
-      return NextResponse.json({ error: error.message }, { status: 400 });
+      return NextResponse.json(
+        { error: 'invalid_target', message: describeTargetError(error, getAuditMessages(locale)) },
+        { status: 400 },
+      );
     }
     console.error('[api/v1/scan] unexpected failure', error);
-    return NextResponse.json({ error: 'Scan failed.' }, { status: 500 });
+    return NextResponse.json({ error: 'scan_failed' }, { status: 500 });
   }
 }
