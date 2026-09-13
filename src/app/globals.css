@@ -2,56 +2,204 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Palette "Iris & Mint".
+ * Light is defined on :root; dark overrides only the tokens. The theme class is
+ * set by next-themes on <html>, with `system` following prefers-color-scheme.
+ */
 :root {
+  --bg: 250 250 252;
+  --bg-subtle: 244 243 249;
+  --surface: 255 255 255;
+  --surface-2: 247 246 251;
+  --border: 229 227 238;
+  --border-strong: 206 203 222;
+  --fg: 17 16 28;
+  --fg-muted: 84 82 106;
+  --fg-subtle: 128 125 150;
+  --accent: 104 66 255;
+  --accent-strong: 84 46 235;
+  --accent-fg: 255 255 255;
+  --mint: 5 150 120;
+  --pass: 22 150 80;
+  --warn: 196 128 0;
+  --fail: 214 40 40;
+  --info: 37 99 235;
+  --grid: 17 16 28;
+  color-scheme: light;
+}
+
+.dark {
+  --bg: 8 7 13;
+  --bg-subtle: 13 12 20;
+  --surface: 17 16 26;
+  --surface-2: 23 22 35;
+  --border: 36 34 52;
+  --border-strong: 56 53 78;
+  --fg: 241 240 248;
+  --fg-muted: 165 162 188;
+  --fg-subtle: 112 109 138;
+  --accent: 142 112 255;
+  --accent-strong: 164 139 255;
+  --accent-fg: 10 8 20;
+  --mint: 61 219 180;
+  --pass: 74 222 128;
+  --warn: 250 204 21;
+  --fail: 248 113 113;
+  --info: 96 165 250;
+  --grid: 241 240 248;
   color-scheme: dark;
 }
 
-html {
-  scroll-behavior: smooth;
-}
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    scroll-behavior: smooth;
+  }
 
-body {
-  @apply bg-ink-950 text-slate-200 antialiased;
-  background-image:
-    radial-gradient(60rem 40rem at 50% -10rem, rgba(16, 185, 129, 0.13), transparent 70%),
-    radial-gradient(40rem 30rem at 110% 20rem, rgba(59, 130, 246, 0.08), transparent 70%);
-  background-repeat: no-repeat;
+  body {
+    @apply bg-bg font-sans text-fg antialiased;
+    font-feature-settings: 'ss01', 'cv11';
+  }
+
+  ::selection {
+    background: rgb(var(--accent) / 0.25);
+  }
+
+  :focus-visible {
+    outline: 2px solid rgb(var(--accent));
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
 }
 
 @layer components {
   .container-page {
-    @apply mx-auto w-full max-w-6xl px-5;
+    @apply mx-auto w-full max-w-[1200px] px-5 sm:px-8;
+  }
+
+  .eyebrow {
+    @apply inline-flex items-center gap-2 font-mono text-xs uppercase tracking-[0.18em] text-accent;
   }
 
   .card {
-    @apply rounded-2xl border border-ink-700 bg-ink-900/70 backdrop-blur;
+    @apply rounded-2xl border border-line bg-surface shadow-card;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-full px-5 py-2.5 text-sm font-medium
+      transition duration-200 disabled:cursor-not-allowed disabled:opacity-60;
   }
 
   .btn-primary {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl bg-brand-500 px-5 py-3
-      font-semibold text-ink-950 transition hover:bg-brand-400
-      focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2
-      focus-visible:outline-brand-400 disabled:cursor-not-allowed disabled:opacity-60;
+    @apply btn bg-fg text-bg hover:bg-fg/85;
+  }
+
+  .btn-accent {
+    @apply btn bg-accent text-accent-fg shadow-glow hover:bg-accent-strong;
   }
 
   .btn-ghost {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl border border-ink-600
-      px-5 py-3 font-medium text-slate-200 transition hover:border-brand-500 hover:text-white
-      focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2
-      focus-visible:outline-brand-400;
+    @apply btn border border-line bg-surface text-fg hover:border-line-strong hover:bg-surface-2;
   }
 
-  .input-field {
-    @apply w-full rounded-xl border border-ink-600 bg-ink-950/80 px-4 py-3 text-slate-100
-      placeholder:text-slate-500 focus:border-brand-500 focus:outline-none;
+  .input {
+    @apply w-full rounded-xl border border-line bg-surface px-4 py-3 text-fg outline-none transition
+      placeholder:text-faint focus:border-accent focus:ring-4 focus:ring-accent/15;
   }
 
   .pill {
     @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium;
   }
+
+  .text-gradient {
+    background-image: linear-gradient(100deg, rgb(var(--accent)) 10%, rgb(var(--mint)) 90%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* Hairline grid with a soft radial fade, the backdrop of hero sections. */
+  .bg-grid {
+    background-image:
+      linear-gradient(to right, rgb(var(--grid) / 0.06) 1px, transparent 1px),
+      linear-gradient(to bottom, rgb(var(--grid) / 0.06) 1px, transparent 1px);
+    background-size: 56px 56px;
+    mask-image: radial-gradient(ellipse 70% 60% at 50% 30%, black 30%, transparent 75%);
+  }
+
+  .code-block {
+    @apply overflow-x-auto rounded-xl border border-line bg-subtle p-4 font-mono text-[13px] leading-relaxed text-fg;
+  }
 }
 
-pre {
-  @apply overflow-x-auto rounded-lg border border-ink-700 bg-ink-950 p-3 text-xs
-    leading-relaxed text-slate-300;
+/* Rotating conic border for the highlighted pricing card. */
+@property --beam-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.beam-border {
+  position: relative;
+  isolation: isolate;
+}
+
+.beam-border::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  z-index: -1;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(
+    from var(--beam-angle),
+    transparent 0deg,
+    rgb(var(--accent)) 70deg,
+    rgb(var(--mint)) 140deg,
+    transparent 200deg
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: beam-rotate 5s linear infinite;
+}
+
+@keyframes beam-rotate {
+  to {
+    --beam-angle: 360deg;
+  }
+}
+
+/* CSS-only 3D cube used for the logo mark loader. */
+.cube-scene {
+  perspective: 600px;
+}
+
+.cube {
+  position: relative;
+  transform-style: preserve-3d;
+}
+
+.cube > span {
+  position: absolute;
+  inset: 0;
+  border-radius: 22%;
+  border: 1px solid rgb(var(--accent) / 0.55);
+  background: linear-gradient(135deg, rgb(var(--accent) / 0.35), rgb(var(--mint) / 0.2));
+  backdrop-filter: blur(2px);
 }

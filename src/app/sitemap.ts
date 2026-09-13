@@ -1,10 +1,30 @@
 import type { MetadataRoute } from 'next';
+import { LOCALE_TAGS, LOCALES } from '@/i18n/config';
+import { LEGAL_SLUGS } from '@/i18n/legal';
 import { siteUrl } from '@/lib/plans';
 
+const PAGES: Array<{ path: string; priority: number; changeFrequency: 'weekly' | 'monthly' | 'yearly' }> = [
+  { path: '', priority: 1, changeFrequency: 'weekly' },
+  { path: '/pricing', priority: 0.9, changeFrequency: 'monthly' },
+  { path: '/docs', priority: 0.7, changeFrequency: 'monthly' },
+  { path: '/contact', priority: 0.5, changeFrequency: 'yearly' },
+  ...LEGAL_SLUGS.map((slug) => ({ path: `/legal/${slug}`, priority: 0.2, changeFrequency: 'yearly' as const })),
+];
+
+/** One entry per page per language, each listing its translations for hreflang. */
 export default function sitemap(): MetadataRoute.Sitemap {
-  const now = new Date();
-  return [
-    { url: `${siteUrl()}/`, lastModified: now, changeFrequency: 'weekly', priority: 1 },
-    { url: `${siteUrl()}/docs`, lastModified: now, changeFrequency: 'monthly', priority: 0.8 },
-  ];
+  const base = siteUrl();
+  const lastModified = new Date();
+
+  return PAGES.flatMap((page) =>
+    LOCALES.map((locale) => ({
+      url: `${base}/${locale}${page.path}`,
+      lastModified,
+      changeFrequency: page.changeFrequency,
+      priority: page.priority,
+      alternates: {
+        languages: Object.fromEntries(LOCALES.map((code) => [LOCALE_TAGS[code], `${base}/${code}${page.path}`])),
+      },
+    })),
+  );
 }
