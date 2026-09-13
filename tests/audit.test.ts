@@ -1,5 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { analyseSnapshot } from '@/lib/audit';
+import { analyseSnapshot, applyPlanGating } from '@/lib/audit';
+import { auditEn } from '@/i18n/audit/en';
+import { LOCALES } from '@/i18n/config';
 import { gradeFor, scoreChecks } from '@/lib/audit/score';
 import type { CheckResult, FetchedResource, PageSnapshot } from '@/lib/audit/types';
 
@@ -39,7 +41,6 @@ function snapshot(options: {
         ? resource('', { ok: false, status: 404 })
         : resource(options.sitemap),
     redirectChainLength: 0,
-    warnings: [],
   };
 }
 
@@ -152,9 +153,8 @@ describe('plan gating', () => {
   let freeReport: ReturnType<typeof analyseSnapshot>;
 
   beforeAll(() => {
-    freeReport = analyseSnapshot(
-      snapshot({ html: SPA_HTML, robots: 'User-agent: *\nDisallow: /' }),
-      'free',
+    freeReport = applyPlanGating(
+      analyseSnapshot(snapshot({ html: SPA_HTML, robots: 'User-agent: *\nDisallow: /' }), 'free'),
     );
   });
 
@@ -168,14 +168,26 @@ describe('plan gating', () => {
     const withFix = freeReport.priorityFixes.filter((check) => check.fix);
     expect(withFix).toHaveLength(3);
     expect(freeReport.truncated).toBe(true);
-    expect(freeReport.lockedCount).toBeGreaterThan(0);
     expect(freeReport.priorityFixes.some((check) => check.locked)).toBe(true);
   });
 
+  it('counts each locked fix exactly once', () => {
+    // Regression: checks appear both in categories and in priorityFixes and
+    // used to be counted twice.
+    const lockedIds = new Set(
+      freeReport.categories.flatMap((category) => category.checks).filter((check) => check.locked).map((check) => check.id),
+    );
+    expect(freeReport.lockedCount).toBe(lockedIds.size);
+  });
+
+  it('never sends locked fix text to the client', () => {
+    const everyCheck = [...freeReport.priorityFixes, ...freeReport.categories.flatMap((category) => category.checks)];
+    expect(everyCheck.filter((check) => check.locked).every((check) => !check.fix && !check.evidence)).toBe(true);
+  });
+
   it('unlocks everything on a paid plan', () => {
-    const pro = analyseSnapshot(
-      snapshot({ html: SPA_HTML, robots: 'User-agent: *\nDisallow: /' }),
-      'pro',
+    const pro = applyPlanGating(
+      analyseSnapshot(snapshot({ html: SPA_HTML, robots: 'User-agent: *\nDisallow: /' }), 'pro'),
     );
     expect(pro.truncated).toBe(false);
     expect(pro.lockedCount).toBe(0);
@@ -205,7 +217,7 @@ describe('scoring', () => {
         impact: 'low',
       },
     ];
-    expect(scoreChecks(checks).score).toBe(100);
+    expect(scoreChecks(checks, auditEn).score).toBe(100);
   });
 
   it('sorts critical failures to the top of the fix list', () => {
@@ -231,6 +243,38 @@ describe('scoring', () => {
         impact: 'critical',
       },
     ];
-    expect(scoreChecks(checks).priorityFixes[0]?.id).toBe('major');
+    expect(scoreChecks(checks, auditEn).priorityFixes[0]?.id).toBe('major');
+  });
+});
+
+describe('localisation of findings', () => {
+  it.each(LOCALES)('produces a complete report in %s', (locale) => {
+    const report = analyseSnapshot(snapshot({ html: SPA_HTML, robots: 'User-agent: *\nDisallow: /' }), 'pro', locale);
+    const checks = report.categories.flatMap((category) => category.checks);
+
+    expect(report.locale).toBe(locale);
+    expect(checks).toHaveLength(31);
+    expect(report.verdict.length).toBeGreaterThan(10);
+    for (const check of checks) {
+      expect(check.title.trim()).not.toBe('');
+      expect(check.summary.trim()).not.toBe('');
+      expect(check.summary).not.toContain('undefined');
+    }
+    expect(report.categories.every((category) => category.label.trim().length > 0)).toBe(true);
+  });
+
+  it('actually translates instead of silently falling back to English', () => {
+    const html = SPA_HTML;
+    const english = analyseSnapshot(snapshot({ html }), 'pro', 'en');
+    for (const locale of LOCALES.filter((code) => code !== 'en')) {
+      const translated = analyseSnapshot(snapshot({ html }), 'pro', locale);
+      expect(translated.verdict).not.toBe(english.verdict);
+      expect(translated.categories[0]?.label).not.toBe(english.categories[0]?.label);
+    }
+  });
+
+  it('keeps check ids and scores identical across languages', () => {
+    const scores = LOCALES.map((locale) => analyseSnapshot(snapshot({ html: GOOD_HTML }), 'pro', locale).score);
+    expect(new Set(scores).size).toBe(1);
   });
 });

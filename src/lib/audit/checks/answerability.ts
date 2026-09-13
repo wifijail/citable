@@ -1,10 +1,12 @@
 import type { CheckContext, CheckResult } from '../types';
 
+/** Question openers in every supported locale, so a Russian FAQ counts too. */
 const QUESTION_STARTERS =
-  /^(how|what|why|when|where|who|which|can|does|do|is|are|should|will|would|could)\b/i;
+  /^(how|what|why|when|where|who|which|can|does|do|is|are|should|will|would|could|как|что|почему|зачем|когда|где|кто|какой|какая|какие|сколько|можно|cómo|qué|por qué|cuándo|dónde|quién|cuál|cuánto|puedo|wie|was|warum|wann|wo|wer|welche|kann|gibt)(\s|$)/i;
 
 export function answerabilityChecks(ctx: CheckContext): CheckResult[] {
-  const { $, text, wordCount } = ctx;
+  const { $, text, wordCount, t } = ctx;
+  const m = t.checks;
   const results: CheckResult[] = [];
 
   const headings = $('h1, h2, h3, h4')
@@ -19,27 +21,25 @@ export function answerabilityChecks(ctx: CheckContext): CheckResult[] {
 
   results.push({
     id: 'heading-structure',
-    title: 'Headings form a clean, chunkable outline',
+    title: m.headings.title,
     category: 'answerability',
-    status: structureOk ? 'pass' : h1Count === 0 || h1Count > 1 ? 'fail' : 'warn',
+    status: structureOk ? 'pass' : h1Count !== 1 ? 'fail' : 'warn',
     score: structureOk ? 1 : h1Count === 1 ? 0.6 : 0.2,
     weight: 5,
     impact: 'high',
     summary:
       h1Count === 0
-        ? 'No H1 at all, so there is no unambiguous title for the page.'
+        ? m.headings.noH1
         : h1Count > 1
-          ? `${h1Count} H1 elements compete for the page topic.`
+          ? m.headings.manyH1(h1Count)
           : h2Count < 2
-            ? 'One H1 but almost no H2 sections, so the page is a single undifferentiated block.'
-            : `Clean outline: 1 H1 and ${h2Count} H2 sections.`,
+            ? m.headings.fewH2
+            : m.headings.ok(h2Count),
     evidence: [
-      `H1: ${h1Count}, H2: ${h2Count}, H3: ${$('h3').length}`,
+      m.headings.counts(h1Count, h2Count, $('h3').length),
       ...headings.slice(0, 5).map((heading) => `"${heading.slice(0, 80)}"`),
     ],
-    fix: structureOk
-      ? undefined
-      : 'Retrieval pipelines split pages into chunks at heading boundaries before embedding them. Use exactly one H1 for the page topic and an H2 per self-contained sub-answer, so each chunk stays meaningful on its own.',
+    fix: structureOk ? undefined : m.headings.fix,
   });
 
   // --- Question-shaped headings -------------------------------------------------
@@ -50,7 +50,7 @@ export function answerabilityChecks(ctx: CheckContext): CheckResult[] {
 
   results.push({
     id: 'question-headings',
-    title: 'Headings match how people actually ask',
+    title: m.questionHeadings.title,
     category: 'answerability',
     status: questionRatio >= 0.25 ? 'pass' : questionRatio > 0 ? 'warn' : 'fail',
     score: questionRatio >= 0.25 ? 1 : questionRatio > 0 ? 0.55 : 0.1,
@@ -58,13 +58,10 @@ export function answerabilityChecks(ctx: CheckContext): CheckResult[] {
     impact: 'high',
     summary:
       questionHeadings.length > 0
-        ? `${questionHeadings.length} of ${headings.length} headings are phrased as questions or direct queries.`
-        : 'No question-shaped headings. Nothing on the page lines up with a natural-language prompt.',
+        ? m.questionHeadings.ok(questionHeadings.length, headings.length)
+        : m.questionHeadings.none,
     evidence: questionHeadings.slice(0, 4).map((heading) => `"${heading.slice(0, 80)}"`),
-    fix:
-      questionRatio >= 0.25
-        ? undefined
-        : 'Rewrite section headings as the question a user would type, then answer it in the first two sentences below. "Pricing" becomes "How much does X cost?" — semantic match against the prompt is what gets the chunk retrieved.',
+    fix: questionRatio >= 0.25 ? undefined : m.questionHeadings.fix,
   });
 
   // --- Extractable formatting ----------------------------------------------------
@@ -74,19 +71,15 @@ export function answerabilityChecks(ctx: CheckContext): CheckResult[] {
 
   results.push({
     id: 'extractable-formatting',
-    title: 'Facts are formatted as lists or tables',
+    title: m.formatting.title,
     category: 'answerability',
     status: hasStructure ? 'pass' : 'warn',
     score: hasStructure ? 1 : 0.35,
     weight: 3,
     impact: 'medium',
-    summary: hasStructure
-      ? `${listItems} list items and ${tables} table(s) give models something to lift directly.`
-      : 'Content is almost entirely prose, which is harder to quote accurately.',
-    evidence: [`${listItems} list items`, `${tables} tables`],
-    fix: hasStructure
-      ? undefined
-      : 'Convert comparisons, steps and specifications into real <ul>/<ol>/<table> markup. Structured fragments survive chunking intact and are reproduced with far fewer hallucinated details than paragraphs.',
+    summary: hasStructure ? m.formatting.ok(listItems, tables) : m.formatting.prose,
+    evidence: [m.formatting.items(listItems), m.formatting.tables(tables)],
+    fix: hasStructure ? undefined : m.formatting.fix,
   });
 
   // --- Answer density --------------------------------------------------------------
@@ -103,7 +96,7 @@ export function answerabilityChecks(ctx: CheckContext): CheckResult[] {
 
   results.push({
     id: 'paragraph-density',
-    title: 'Paragraphs are short enough to quote',
+    title: m.paragraphs.title,
     category: 'answerability',
     status: concise ? 'pass' : paragraphs.length === 0 ? 'fail' : 'warn',
     score: concise ? 1 : paragraphs.length === 0 ? 0 : 0.5,
@@ -111,52 +104,44 @@ export function answerabilityChecks(ctx: CheckContext): CheckResult[] {
     impact: 'medium',
     summary:
       paragraphs.length === 0
-        ? 'No substantive paragraphs were found in the server HTML.'
-        : `Average paragraph length is ${Math.round(averageWords)} words across ${paragraphs.length} paragraphs.`,
-    evidence: [`${paragraphs.length} paragraphs analysed`],
-    fix: concise
-      ? undefined
-      : 'Keep paragraphs under roughly 80 words and put the claim in the first sentence. Long paragraphs get split mid-argument during chunking, and the half that gets retrieved often loses the conclusion.',
+        ? m.paragraphs.none
+        : m.paragraphs.summary(Math.round(averageWords), paragraphs.length),
+    evidence: [m.paragraphs.analysed(paragraphs.length)],
+    fix: concise ? undefined : m.paragraphs.fix,
   });
 
   // --- Depth --------------------------------------------------------------------
   const depthOk = wordCount >= 600;
   results.push({
     id: 'content-depth',
-    title: 'The page has enough substance to be a source',
+    title: m.depth.title,
     category: 'answerability',
     status: depthOk ? 'pass' : wordCount >= 300 ? 'warn' : 'fail',
     score: depthOk ? 1 : wordCount >= 300 ? 0.6 : 0.2,
     weight: 3,
     impact: 'medium',
-    summary: `${wordCount} words of readable content.`,
-    evidence: [`${wordCount} words`, `${text.split(/[.!?]+\s/).length} sentences (approx.)`],
-    fix: depthOk
-      ? undefined
-      : 'Thin pages are rarely selected as citations because they offer no unique facts. Add original data, examples or numbers a model cannot get from three other sources.',
+    summary: m.depth.summary(wordCount),
+    evidence: [m.depth.words(wordCount), m.depth.sentences(text.split(/[.!?]+\s/).length)],
+    fix: depthOk ? undefined : m.depth.fix,
   });
 
   // --- Semantic containers ---------------------------------------------------------
   const hasMain = $('main').length > 0 || $('article').length > 0 || $('[role="main"]').length > 0;
   results.push({
     id: 'semantic-html',
-    title: 'Main content sits in semantic containers',
+    title: m.semanticHtml.title,
     category: 'answerability',
     status: hasMain ? 'pass' : 'warn',
     score: hasMain ? 1 : 0.4,
     weight: 2,
     impact: 'low',
-    summary: hasMain
-      ? 'Content is wrapped in <main> or <article>.'
-      : 'No <main> or <article> element, so boilerplate and content are indistinguishable.',
+    summary: hasMain ? m.semanticHtml.ok : m.semanticHtml.missing,
     evidence: [
       `<main>: ${$('main').length}`,
       `<article>: ${$('article').length}`,
       `<nav>: ${$('nav').length}`,
     ],
-    fix: hasMain
-      ? undefined
-      : 'Wrap the body copy in <main> or <article> and keep navigation inside <nav>/<footer>. Readability extractors use these landmarks to strip boilerplate — without them, your menu can end up in the extracted "content".',
+    fix: hasMain ? undefined : m.semanticHtml.fix,
   });
 
   return results;

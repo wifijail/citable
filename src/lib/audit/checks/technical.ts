@@ -1,84 +1,84 @@
+import { fetchTimeoutMs } from '../fetcher';
 import type { CheckContext, CheckResult } from '../types';
 
 export function technicalChecks(ctx: CheckContext): CheckResult[] {
-  const { $, snapshot } = ctx;
+  const { $, snapshot, t } = ctx;
+  const m = t.checks;
   const { page } = snapshot;
   const results: CheckResult[] = [];
 
   // --- Response status ------------------------------------------------------------
+  const errorText =
+    page.error === 'timeout' ? t.warnings.timeout(fetchTimeoutMs()) : (page.error ?? '');
+
   results.push({
     id: 'http-status',
-    title: 'The page returns a successful response',
+    title: m.httpStatus.title,
     category: 'technical',
     status: page.ok ? 'pass' : 'fail',
     score: page.ok ? 1 : 0,
     weight: 6,
     impact: 'critical',
     summary: page.ok
-      ? `HTTP ${page.status} from ${page.url}.`
+      ? m.httpStatus.ok(page.status, page.url)
       : page.error
-        ? `Request failed: ${page.error}`
-        : `HTTP ${page.status} — crawlers will drop this page.`,
+        ? m.httpStatus.error(errorText)
+        : m.httpStatus.bad(page.status),
     evidence: [
-      `Status: ${page.status || 'no response'}`,
-      `Content-Type: ${page.headers['content-type'] ?? 'unknown'}`,
+      m.httpStatus.status(page.status ? String(page.status) : m.httpStatus.noResponse),
+      m.httpStatus.contentType(page.headers['content-type'] ?? m.httpStatus.unknown),
     ],
-    fix: page.ok
-      ? undefined
-      : 'Make sure the URL responds with 200 to an anonymous request. Bot-protection layers (Cloudflare "Under Attack", aggressive WAF rules) frequently return 403 to AI crawlers while a normal browser sees the page fine.',
+    fix: page.ok ? undefined : m.httpStatus.fix,
   });
 
   // --- HTTPS -----------------------------------------------------------------------
   const isHttps = snapshot.finalUrl.startsWith('https://');
   results.push({
     id: 'https',
-    title: 'Served over HTTPS',
+    title: m.https.title,
     category: 'technical',
     status: isHttps ? 'pass' : 'fail',
     score: isHttps ? 1 : 0,
     weight: 4,
     impact: 'high',
-    summary: isHttps ? 'The page is served over HTTPS.' : 'The page is served over plain HTTP.',
+    summary: isHttps ? m.https.ok : m.https.fail,
     evidence: [snapshot.finalUrl],
-    fix: isHttps
-      ? undefined
-      : 'Serve the site over HTTPS and 301-redirect HTTP to it. Several crawlers skip insecure origins outright.',
+    fix: isHttps ? undefined : m.https.fix,
   });
 
-  // --- Time to first byte -------------------------------------------------------------
+  // --- Time to full response ---------------------------------------------------------
   const elapsed = page.elapsedMs;
   const fastEnough = elapsed <= 1500;
   results.push({
     id: 'response-time',
-    title: 'Server responds quickly',
+    title: m.responseTime.title,
     category: 'technical',
     status: fastEnough ? 'pass' : elapsed <= 3500 ? 'warn' : 'fail',
     score: fastEnough ? 1 : elapsed <= 3500 ? 0.6 : 0.2,
     weight: 3,
     impact: 'medium',
-    summary: `Full response took ${elapsed} ms.`,
-    evidence: [`${elapsed} ms measured from request to full body`],
-    fix: fastEnough
-      ? undefined
-      : 'Live retrieval agents work under a hard latency budget while a user waits for an answer. Slow pages get dropped from the candidate set even when they are the best source. Cache the HTML at the edge and keep server work off the critical path.',
+    summary: m.responseTime.summary(elapsed),
+    evidence: [m.responseTime.evidence(elapsed)],
+    fix: fastEnough ? undefined : m.responseTime.fix,
   });
 
   // --- Redirect chain ---------------------------------------------------------------
   const hops = snapshot.redirectChainLength;
   results.push({
     id: 'redirect-chain',
-    title: 'Reaching the page takes few redirects',
+    title: m.redirects.title,
     category: 'technical',
     status: hops <= 1 ? 'pass' : hops <= 2 ? 'warn' : 'fail',
     score: hops <= 1 ? 1 : hops <= 2 ? 0.6 : 0.2,
     weight: 2,
     impact: 'low',
-    summary: hops === 0 ? 'No redirects.' : `${hops} redirect hop(s) before the final URL.`,
-    evidence: [`${hops} hop(s)`, `Requested: ${snapshot.requestedUrl}`, `Final: ${snapshot.finalUrl}`],
-    fix:
-      hops <= 1
-        ? undefined
-        : 'Collapse redirect chains to a single hop. Some crawlers stop following after two, and every hop adds latency to a time-boxed fetch.',
+    summary: hops === 0 ? m.redirects.none : m.redirects.summary(hops),
+    evidence: [
+      m.redirects.hops(hops),
+      m.redirects.requested(snapshot.requestedUrl),
+      m.redirects.final(snapshot.finalUrl),
+    ],
+    fix: hops <= 1 ? undefined : m.redirects.fix,
   });
 
   // --- Page weight -----------------------------------------------------------------
@@ -86,17 +86,15 @@ export function technicalChecks(ctx: CheckContext): CheckResult[] {
   const lean = kilobytes <= 500;
   results.push({
     id: 'html-weight',
-    title: 'HTML payload is a reasonable size',
+    title: m.htmlWeight.title,
     category: 'technical',
     status: lean ? 'pass' : kilobytes <= 1500 ? 'warn' : 'fail',
     score: lean ? 1 : kilobytes <= 1500 ? 0.6 : 0.2,
     weight: 2,
     impact: 'low',
-    summary: `${kilobytes.toFixed(0)} KB of HTML.`,
+    summary: m.htmlWeight.summary(kilobytes.toFixed(0)),
     evidence: [`${kilobytes.toFixed(1)} KB`],
-    fix: lean
-      ? undefined
-      : 'Trim the document. Extraction pipelines truncate oversized pages, and the tail — often your conclusion — is what gets cut.',
+    fix: lean ? undefined : m.htmlWeight.fix,
   });
 
   // --- Image alt coverage --------------------------------------------------------------
@@ -109,7 +107,7 @@ export function technicalChecks(ctx: CheckContext): CheckResult[] {
 
   results.push({
     id: 'image-alt-coverage',
-    title: 'Images carry descriptive alt text',
+    title: m.imageAlt.title,
     category: 'technical',
     status: coverage >= 0.9 ? 'pass' : coverage >= 0.6 ? 'warn' : 'fail',
     score: coverage,
@@ -117,13 +115,10 @@ export function technicalChecks(ctx: CheckContext): CheckResult[] {
     impact: 'low',
     summary:
       images.length === 0
-        ? 'No images on the page.'
-        : `${withAlt} of ${images.length} images have alt text (${Math.round(coverage * 100)}%).`,
-    evidence: [`${images.length} images`, `${withAlt} with non-empty alt`],
-    fix:
-      coverage >= 0.9
-        ? undefined
-        : 'Describe what each informative image shows. Alt text is the only part of an image that reaches a text-only crawler, and charts or screenshots often carry the data worth citing.',
+        ? m.imageAlt.noImages
+        : m.imageAlt.summary(withAlt, images.length, Math.round(coverage * 100)),
+    evidence: [m.imageAlt.images(images.length), m.imageAlt.withAlt(withAlt)],
+    fix: coverage >= 0.9 ? undefined : m.imageAlt.fix,
   });
 
   return results;

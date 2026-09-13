@@ -1,21 +1,62 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
+import type { AuditMessages } from '@/i18n/audit/en';
 import type { FetchedResource, PageSnapshot } from './types';
 
 const USER_AGENT =
-  'CitableBot/1.0 (+https://citable.dev/bot; AI visibility auditor; respects robots.txt)';
+  'CitableBot/1.0 (+https://github.com/wifijail/citable; AI visibility auditor; respects robots.txt)';
 
 const MAX_BODY_BYTES = 3_000_000; // 3 MB is far beyond any sane HTML document.
 
-function timeoutMs(): number {
+export function fetchTimeoutMs(): number {
   const parsed = Number.parseInt(process.env.FETCH_TIMEOUT_MS ?? '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 10_000;
 }
 
-export class InvalidTargetError extends Error {}
+export type TargetErrorCode =
+  | 'empty'
+  | 'invalid'
+  | 'protocol'
+  | 'privateHost'
+  | 'fullDomain'
+  | 'privateIp'
+  | 'unresolvable'
+  | 'resolvesPrivate';
+
+/** Thrown for user-input problems. Carries a code so the API can localise it. */
+export class InvalidTargetError extends Error {
+  constructor(
+    readonly code: TargetErrorCode,
+    readonly detail = '',
+  ) {
+    super(`${code}${detail ? `: ${detail}` : ''}`);
+    this.name = 'InvalidTargetError';
+  }
+}
+
+export function describeTargetError(error: InvalidTargetError, t: AuditMessages): string {
+  switch (error.code) {
+    case 'empty':
+      return t.errors.empty;
+    case 'invalid':
+      return t.errors.invalid(error.detail);
+    case 'protocol':
+      return t.errors.protocol;
+    case 'privateHost':
+      return t.errors.privateHost;
+    case 'fullDomain':
+      return t.errors.fullDomain;
+    case 'privateIp':
+      return t.errors.privateIp;
+    case 'unresolvable':
+      return t.errors.unresolvable(error.detail);
+    case 'resolvesPrivate':
+      return t.errors.resolvesPrivate;
+  }
+}
 
 /** Blocks loopback, link-local, private and carrier-grade-NAT ranges. */
-function isPrivateAddress(address: string): boolean {
+export function isPrivateAddress(address: string): boolean {
   if (isIP(address) === 6) {
     const normalized = address.toLowerCase();
     if (normalized === '::1' || normalized === '::') return true;
@@ -43,11 +84,11 @@ function isPrivateAddress(address: string): boolean {
 
 /**
  * Normalises user input into a safe, absolute http(s) URL and refuses anything
- * that points back into our own infrastructure (SSRF guard).
+ * that points back into private infrastructure (SSRF guard).
  */
 export async function assertPublicUrl(input: string): Promise<URL> {
   const trimmed = input.trim();
-  if (!trimmed) throw new InvalidTargetError('Enter a URL to scan.');
+  if (!trimmed) throw new InvalidTargetError('empty');
 
   const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
 
@@ -55,39 +96,35 @@ export async function assertPublicUrl(input: string): Promise<URL> {
   try {
     url = new URL(withScheme);
   } catch {
-    throw new InvalidTargetError(`"${input}" is not a valid URL.`);
+    throw new InvalidTargetError('invalid', input.slice(0, 120));
   }
 
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new InvalidTargetError('Only http:// and https:// URLs can be scanned.');
+    throw new InvalidTargetError('protocol');
   }
 
-  const host = url.hostname.toLowerCase();
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
   if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.internal')) {
-    throw new InvalidTargetError('Private and local hosts cannot be scanned.');
+    throw new InvalidTargetError('privateHost');
   }
   if (!host.includes('.') && isIP(host) === 0) {
-    throw new InvalidTargetError('Enter a full public domain, e.g. example.com.');
+    throw new InvalidTargetError('fullDomain');
   }
 
   if (isIP(host) !== 0) {
-    if (isPrivateAddress(host)) {
-      throw new InvalidTargetError('Private network addresses cannot be scanned.');
-    }
+    if (isPrivateAddress(host)) throw new InvalidTargetError('privateIp');
     return url;
   }
 
+  let resolved: Array<{ address: string }>;
   try {
-    const resolved = await lookup(host, { all: true });
-    if (resolved.length === 0) {
-      throw new InvalidTargetError(`Could not resolve "${host}".`);
-    }
-    if (resolved.some((entry) => isPrivateAddress(entry.address))) {
-      throw new InvalidTargetError('That hostname resolves to a private address.');
-    }
-  } catch (error) {
-    if (error instanceof InvalidTargetError) throw error;
-    throw new InvalidTargetError(`Could not resolve "${host}". Check the domain and try again.`);
+    resolved = await lookup(host, { all: true });
+  } catch {
+    throw new InvalidTargetError('unresolvable', host);
+  }
+  if (resolved.length === 0) throw new InvalidTargetError('unresolvable', host);
+  if (resolved.some((entry) => isPrivateAddress(entry.address))) {
+    throw new InvalidTargetError('resolvesPrivate');
   }
 
   return url;
@@ -97,7 +134,7 @@ export async function assertPublicUrl(input: string): Promise<URL> {
 export async function fetchResource(url: string, accept: string): Promise<FetchedResource> {
   const startedAt = Date.now();
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs());
+  const timer = setTimeout(() => controller.abort(), fetchTimeoutMs());
 
   try {
     const response = await fetch(url, {
@@ -128,10 +165,10 @@ export async function fetchResource(url: string, accept: string): Promise<Fetche
   } catch (error) {
     const message =
       error instanceof Error && error.name === 'AbortError'
-        ? `Timed out after ${timeoutMs()}ms`
+        ? 'timeout'
         : error instanceof Error
           ? error.message
-          : 'Unknown network error';
+          : 'network error';
     return {
       url,
       ok: false,
@@ -151,7 +188,7 @@ async function countRedirects(url: string): Promise<number> {
   let hops = 0;
   let current = url;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs());
+  const timer = setTimeout(() => controller.abort(), fetchTimeoutMs());
 
   try {
     while (hops < 6) {
@@ -182,7 +219,6 @@ async function countRedirects(url: string): Promise<number> {
 export async function fetchTarget(rawUrl: string): Promise<PageSnapshot> {
   const url = await assertPublicUrl(rawUrl);
   const origin = url.origin;
-  const warnings: string[] = [];
 
   const [page, robots, llmsTxt, redirectChainLength] = await Promise.all([
     fetchResource(url.toString(), 'text/html,application/xhtml+xml'),
@@ -190,14 +226,6 @@ export async function fetchTarget(rawUrl: string): Promise<PageSnapshot> {
     fetchResource(`${origin}/llms.txt`, 'text/plain'),
     countRedirects(url.toString()),
   ]);
-
-  if (!page.ok) {
-    warnings.push(
-      page.error
-        ? `The page could not be fetched: ${page.error}`
-        : `The page responded with HTTP ${page.status}.`,
-    );
-  }
 
   // Prefer the sitemap robots.txt declares; fall back to the conventional path.
   const declaredSitemap = /^\s*sitemap\s*:\s*(\S+)/im.exec(robots.ok ? robots.body : '')?.[1];
@@ -209,10 +237,9 @@ export async function fetchTarget(rawUrl: string): Promise<PageSnapshot> {
     finalUrl: page.url || url.toString(),
     origin,
     page,
-    robots: robots.ok ? robots : robots.status > 0 ? robots : null,
+    robots: robots.status > 0 ? robots : null,
     llmsTxt,
     sitemap,
     redirectChainLength,
-    warnings,
   };
 }

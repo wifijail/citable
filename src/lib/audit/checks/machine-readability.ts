@@ -4,36 +4,33 @@ import type { CheckContext, CheckResult } from '../types';
 const SPA_MOUNT_SELECTORS = ['#root', '#app', '#__nuxt', '[data-reactroot]', 'app-root'];
 
 export function machineReadabilityChecks(ctx: CheckContext): CheckResult[] {
-  const { snapshot, $, text, wordCount } = ctx;
+  const { snapshot, $, text, wordCount, t } = ctx;
+  const m = t.checks;
   const results: CheckResult[] = [];
   const html = snapshot.page.body;
 
   // --- Is the content actually in the server response? ----------------------
   // Most AI crawlers do not execute JavaScript. Whatever is not in this HTML
   // string effectively does not exist for them.
-  const ssrScore = wordCount >= 300 ? 1 : wordCount >= 150 ? 0.75 : wordCount >= 50 ? 0.35 : 0;
   results.push({
     id: 'server-rendered-content',
-    title: 'Content is present without running JavaScript',
+    title: m.serverRendered.title,
     category: 'machine-readability',
     status: wordCount >= 150 ? 'pass' : wordCount >= 50 ? 'warn' : 'fail',
-    score: ssrScore,
+    score: wordCount >= 300 ? 1 : wordCount >= 150 ? 0.75 : wordCount >= 50 ? 0.35 : 0,
     weight: 14,
     impact: 'critical',
     summary:
       wordCount >= 150
-        ? `${wordCount} words are readable directly from the HTML response.`
+        ? m.serverRendered.ok(wordCount)
         : wordCount >= 50
-          ? `Only ${wordCount} words are server-rendered. Thin pages rarely get quoted.`
-          : `Almost nothing is server-rendered (${wordCount} words). AI crawlers see an empty page.`,
+          ? m.serverRendered.thin(wordCount)
+          : m.serverRendered.empty(wordCount),
     evidence: [
-      `${wordCount} words of visible text in the raw HTML`,
-      `${(html.length / 1024).toFixed(1)} KB of HTML returned`,
+      m.serverRendered.words(wordCount),
+      m.serverRendered.size((html.length / 1024).toFixed(1)),
     ],
-    fix:
-      wordCount >= 150
-        ? undefined
-        : 'Render the main content on the server. In Next.js keep the content in a Server Component (no `use client` above it) or use `generateStaticParams`; in Vue/Nuxt use SSR or `nuxt generate`; in a pure SPA add prerendering for crawler user-agents. Verify with `curl -s <url> | rg -o "<p>.*</p>" | head` — whatever you cannot see there, no AI crawler can either.',
+    fix: wordCount >= 150 ? undefined : m.serverRendered.fix,
   });
 
   // --- Empty SPA mount point -------------------------------------------------
@@ -41,28 +38,21 @@ export function machineReadabilityChecks(ctx: CheckContext): CheckResult[] {
     const node = $(selector).first();
     return node.length > 0 && node.text().trim().length < 40;
   });
-  const scriptCount = $('script[src]').length;
 
   results.push({
     id: 'client-side-rendering-risk',
-    title: 'No empty client-rendered shell',
+    title: m.clientShell.title,
     category: 'machine-readability',
     status: emptyMounts.length > 0 ? 'fail' : 'pass',
     score: emptyMounts.length > 0 ? 0 : 1,
     weight: 6,
     impact: emptyMounts.length > 0 ? 'critical' : 'low',
-    summary:
-      emptyMounts.length > 0
-        ? `Found an empty mount point (${emptyMounts.join(', ')}) that is filled in by JavaScript at runtime.`
-        : 'No empty client-side mount point detected.',
+    summary: emptyMounts.length > 0 ? m.clientShell.fail(emptyMounts.join(', ')) : m.clientShell.ok,
     evidence: [
-      ...emptyMounts.map((selector) => `${selector} is present but contains no text`),
-      `${scriptCount} external script tag(s) on the page`,
+      ...emptyMounts.map((selector) => m.clientShell.empty(selector)),
+      m.clientShell.scripts($('script[src]').length),
     ],
-    fix:
-      emptyMounts.length > 0
-        ? 'This is the single most expensive AI-visibility bug: the crawler receives an empty container and moves on. Move rendering to the server, or prerender each route to static HTML at build time.'
-        : undefined,
+    fix: emptyMounts.length > 0 ? m.clientShell.fix : undefined,
   });
 
   // --- llms.txt --------------------------------------------------------------
@@ -74,24 +64,20 @@ export function machineReadabilityChecks(ctx: CheckContext): CheckResult[] {
 
   results.push({
     id: 'llms-txt',
-    title: 'llms.txt gives assistants a curated map of the site',
+    title: m.llmsTxt.title,
     category: 'machine-readability',
-    status: wellFormed ? 'pass' : hasLlms ? 'warn' : 'warn',
+    status: wellFormed ? 'pass' : 'warn',
     score: wellFormed ? 1 : hasLlms ? 0.6 : 0,
     weight: 5,
     impact: 'medium',
-    summary: wellFormed
-      ? 'A well-formed /llms.txt is published.'
-      : hasLlms
-        ? '/llms.txt exists but does not follow the expected Markdown structure.'
-        : 'No /llms.txt. Assistants have to guess which pages matter.',
+    summary: wellFormed ? m.llmsTxt.ok : hasLlms ? m.llmsTxt.malformed : m.llmsTxt.missing,
     evidence: [
-      `${snapshot.origin}/llms.txt returned HTTP ${llms?.status ?? 0}`,
-      ...(hasLlms ? [`${llmsBody.split(/\r?\n/).length} lines`] : []),
+      t.common.httpStatus(`${snapshot.origin}/llms.txt`, llms?.status ?? 0),
+      ...(hasLlms ? [m.llmsTxt.lines(llmsBody.split(/\r?\n/).length)] : []),
     ],
     fix: wellFormed
       ? undefined
-      : `Publish /llms.txt as static Markdown pointing at the pages you want quoted:\n\n# ${new URL(snapshot.finalUrl).hostname}\n\n> One-sentence description of what this site is.\n\n## Docs\n- [Getting started](${snapshot.origin}/docs/start): what it covers\n- [Pricing](${snapshot.origin}/pricing): plans and limits\n\n## Optional\n- [Changelog](${snapshot.origin}/changelog)`,
+      : m.llmsTxt.fix(new URL(snapshot.finalUrl).hostname, snapshot.origin),
   });
 
   // --- Sitemap ---------------------------------------------------------------
@@ -101,40 +87,30 @@ export function machineReadabilityChecks(ctx: CheckContext): CheckResult[] {
 
   results.push({
     id: 'sitemap-available',
-    title: 'A valid XML sitemap is reachable',
+    title: m.sitemap.title,
     category: 'machine-readability',
     status: sitemapOk ? 'pass' : 'warn',
     score: sitemapOk ? 1 : 0,
     weight: 4,
     impact: 'medium',
-    summary: sitemapOk
-      ? `Sitemap found with ${urlCount} URL entries.`
-      : 'No valid XML sitemap was found, so indexers must discover pages by following links.',
-    evidence: [`${sitemap?.url ?? 'sitemap.xml'} returned HTTP ${sitemap?.status ?? 0}`],
-    fix: sitemapOk
-      ? undefined
-      : `Generate /sitemap.xml with <lastmod> dates and declare it in robots.txt:\n\nSitemap: ${snapshot.origin}/sitemap.xml\n\nFreshness signals from <lastmod> directly influence which version of a page answer engines cache.`,
+    summary: sitemapOk ? m.sitemap.ok(urlCount) : m.sitemap.missing,
+    evidence: [t.common.httpStatus(sitemap?.url ?? 'sitemap.xml', sitemap?.status ?? 0)],
+    fix: sitemapOk ? undefined : m.sitemap.fix(snapshot.origin),
   });
 
   // --- Signal-to-noise --------------------------------------------------------
   const ratio = html.length > 0 ? text.length / html.length : 0;
   results.push({
     id: 'text-to-html-ratio',
-    title: 'HTML is mostly content, not markup noise',
+    title: m.textRatio.title,
     category: 'machine-readability',
     status: ratio >= 0.12 ? 'pass' : ratio >= 0.05 ? 'warn' : 'fail',
     score: ratio >= 0.12 ? 1 : ratio >= 0.05 ? 0.5 : 0.15,
     weight: 4,
     impact: 'medium',
-    summary: `${(ratio * 100).toFixed(1)}% of the response is readable text.`,
-    evidence: [
-      `${text.length.toLocaleString('en-US')} characters of text`,
-      `${html.length.toLocaleString('en-US')} characters of HTML`,
-    ],
-    fix:
-      ratio >= 0.12
-        ? undefined
-        : 'Extraction pipelines truncate long documents before the model sees them, so heavy markup pushes your actual content out of the window. Move inline styles and large JSON blobs out of the document and trim wrapper divs.',
+    summary: m.textRatio.summary((ratio * 100).toFixed(1)),
+    evidence: [m.textRatio.text(String(text.length)), m.textRatio.html(String(html.length))],
+    fix: ratio >= 0.12 ? undefined : m.textRatio.fix,
   });
 
   return results;

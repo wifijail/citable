@@ -1,7 +1,8 @@
+import type { AuditMessages } from '@/i18n/audit/en';
 import { CATEGORIES } from './types';
-import type { AuditReport, CategoryScore, CheckResult, Grade } from './types';
+import type { AuditReport, CategoryScore, CheckResult, Grade, Impact } from './types';
 
-const IMPACT_ORDER: Record<CheckResult['impact'], number> = {
+const IMPACT_ORDER: Record<Impact, number> = {
   critical: 0,
   high: 1,
   medium: 2,
@@ -19,27 +20,25 @@ export function gradeFor(score: number): Grade {
   return 'F';
 }
 
-function verdictFor(score: number, criticalCount: number): string {
-  if (criticalCount > 0) {
-    return criticalCount === 1
-      ? 'One critical issue blocks this page from being cited by AI assistants. Fix it first — everything else is secondary.'
-      : `${criticalCount} critical issues block this page from being cited by AI assistants. Fix those first — everything else is secondary.`;
-  }
-  if (score >= 90) return 'This page is in excellent shape for AI search. Keep freshness signals current and monitor for regressions.';
-  if (score >= 75) return 'Solid foundation. A handful of targeted fixes would put this page ahead of most competitors in its niche.';
-  if (score >= 60) return 'Readable by AI crawlers, but not shaped to be quoted. The answerability and structured-data gaps are costing you citations.';
-  if (score >= 40) return 'Significant gaps. Assistants can reach this page but struggle to extract a confident answer from it.';
-  return 'This page is effectively invisible to AI search. The failures below are foundational, not cosmetic.';
+function verdictFor(score: number, criticalCount: number, t: AuditMessages): string {
+  if (criticalCount === 1) return t.verdicts.criticalOne;
+  if (criticalCount > 1) return t.verdicts.criticalMany(criticalCount);
+  if (score >= 90) return t.verdicts.a;
+  if (score >= 75) return t.verdicts.b;
+  if (score >= 60) return t.verdicts.c;
+  if (score >= 40) return t.verdicts.d;
+  return t.verdicts.f;
 }
 
-function groupByCategory(checks: CheckResult[]): CategoryScore[] {
+function groupByCategory(checks: CheckResult[], t: AuditMessages): CategoryScore[] {
   return CATEGORIES.map((category) => {
     const own = checks.filter((check) => check.category === category.id);
     const totalWeight = own.reduce((sum, check) => sum + check.weight, 0);
     const earned = own.reduce((sum, check) => sum + check.score * check.weight, 0);
     return {
       id: category.id,
-      label: category.label,
+      label: t.categories[category.id].label,
+      description: t.categories[category.id].description,
       weight: category.weight,
       score: totalWeight === 0 ? 100 : Math.round((earned / totalWeight) * 100),
       checks: own,
@@ -47,14 +46,17 @@ function groupByCategory(checks: CheckResult[]): CategoryScore[] {
   });
 }
 
-export function scoreChecks(checks: CheckResult[]): {
+export function scoreChecks(
+  checks: CheckResult[],
+  t: AuditMessages,
+): {
   score: number;
   grade: Grade;
   verdict: string;
   categories: CategoryScore[];
   priorityFixes: CheckResult[];
 } {
-  const categories = groupByCategory(checks);
+  const categories = groupByCategory(checks, t);
 
   const totalWeight = categories.reduce((sum, category) => sum + category.weight, 0);
   const weighted = categories.reduce(
@@ -79,7 +81,7 @@ export function scoreChecks(checks: CheckResult[]): {
   return {
     score,
     grade: gradeFor(score),
-    verdict: verdictFor(score, criticalCount),
+    verdict: verdictFor(score, criticalCount, t),
     categories,
     priorityFixes,
   };
@@ -99,21 +101,24 @@ export function applyPlanGating(report: AuditReport): AuditReport {
     report.priorityFixes.slice(0, FREE_FIX_ALLOWANCE).map((check) => check.id),
   );
 
-  let lockedCount = 0;
+  const lockedIds = new Set<string>();
   const redact = (check: CheckResult): CheckResult => {
     if (unlockedIds.has(check.id) || !check.fix) return check;
-    lockedCount++;
+    lockedIds.add(check.id);
     return { ...check, fix: undefined, evidence: undefined, locked: true };
   };
 
+  const categories = report.categories.map((category) => ({
+    ...category,
+    checks: category.checks.map(redact),
+  }));
+  const priorityFixes = report.priorityFixes.map(redact);
+
   return {
     ...report,
-    categories: report.categories.map((category) => ({
-      ...category,
-      checks: category.checks.map(redact),
-    })),
-    priorityFixes: report.priorityFixes.map(redact),
-    truncated: lockedCount > 0,
-    lockedCount,
+    categories,
+    priorityFixes,
+    truncated: lockedIds.size > 0,
+    lockedCount: lockedIds.size,
   };
 }

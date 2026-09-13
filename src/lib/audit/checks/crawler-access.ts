@@ -26,12 +26,16 @@ function weightOf(id: string): number {
   return AI_CRAWLERS.find((crawler) => crawler.id === id)?.weight ?? 1;
 }
 
-function allowSnippet(names: string[]): string {
-  return names.map((name) => `User-agent: ${name}\nAllow: /\n`).join('\n');
+/** Share of a crawler group's weight that is blocked, 0..1. */
+function blockedRatio(verdicts: CrawlerVerdict[]): number {
+  const total = verdicts.reduce((sum, v) => sum + weightOf(v.id), 0);
+  const lost = verdicts.filter((v) => !v.allowed).reduce((sum, v) => sum + weightOf(v.id), 0);
+  return total === 0 ? 0 : lost / total;
 }
 
 export function crawlerAccessChecks(ctx: CheckContext): CheckResult[] {
-  const { snapshot, $ } = ctx;
+  const { snapshot, $, t } = ctx;
+  const m = t.checks;
   const results: CheckResult[] = [];
   const verdicts = evaluateCrawlers(snapshot);
 
@@ -42,34 +46,28 @@ export function crawlerAccessChecks(ctx: CheckContext): CheckResult[] {
 
   results.push({
     id: 'robots-txt-present',
-    title: 'robots.txt is reachable',
+    title: m.robotsPresent.title,
     category: 'crawler-access',
     status: robotsOk ? 'pass' : 'warn',
     score: robotsOk ? 1 : 0.5,
     weight: 6,
     impact: 'medium',
-    summary: robotsOk
-      ? `robots.txt found with ${parsed.groups.length} user-agent group(s).`
-      : 'No usable robots.txt. Crawlers fall back to "allow everything", which works but leaves you no control.',
+    summary: robotsOk ? m.robotsPresent.ok(parsed.groups.length) : m.robotsPresent.missing,
     evidence: [
-      `${snapshot.origin}/robots.txt returned HTTP ${robots?.status ?? 0}`,
-      ...(parsed.sitemaps.length > 0 ? [`Declares ${parsed.sitemaps.length} sitemap(s)`] : []),
+      t.common.httpStatus(`${snapshot.origin}/robots.txt`, robots?.status ?? 0),
+      ...(parsed.sitemaps.length > 0 ? [m.robotsPresent.sitemaps(parsed.sitemaps.length)] : []),
     ],
-    fix: robotsOk
-      ? undefined
-      : `Publish /robots.txt so AI access is an explicit decision rather than a default:\n\nUser-agent: *\nAllow: /\n\nSitemap: ${snapshot.origin}/sitemap.xml`,
+    fix: robotsOk ? undefined : m.robotsPresent.fix(snapshot.origin),
   });
 
   // --- Retrieval bots: the ones that decide whether you can be cited live ----
   const retrieval = verdicts.filter((v) => v.purpose === 'retrieval');
   const retrievalBlocked = retrieval.filter((v) => !v.allowed);
-  const retrievalWeight = retrieval.reduce((sum, v) => sum + weightOf(v.id), 0);
-  const retrievalLost = retrievalBlocked.reduce((sum, v) => sum + weightOf(v.id), 0);
-  const retrievalRatio = retrievalWeight === 0 ? 0 : retrievalLost / retrievalWeight;
+  const retrievalRatio = blockedRatio(retrieval);
 
   results.push({
     id: 'retrieval-bots-allowed',
-    title: 'Live retrieval agents can fetch this page',
+    title: m.retrievalBots.title,
     category: 'crawler-access',
     status: retrievalBlocked.length === 0 ? 'pass' : retrievalRatio > 0.4 ? 'fail' : 'warn',
     score: 1 - retrievalRatio,
@@ -77,31 +75,29 @@ export function crawlerAccessChecks(ctx: CheckContext): CheckResult[] {
     impact: 'critical',
     summary:
       retrievalBlocked.length === 0
-        ? `All ${retrieval.length} live-retrieval agents (ChatGPT-User, Claude-User, Perplexity-User and friends) are allowed.`
-        : `${retrievalBlocked.length} of ${retrieval.length} live-retrieval agents are blocked: ${retrievalBlocked
-            .map((v) => v.name)
-            .join(', ')}. This page cannot appear in their answers.`,
-    evidence: retrievalBlocked.map(
-      (v) => `${v.name} blocked by "${v.rule}" in group "User-agent: ${v.matchedGroup}"`,
+        ? m.retrievalBots.ok(retrieval.length)
+        : m.retrievalBots.blocked(
+            retrievalBlocked.length,
+            retrieval.length,
+            retrievalBlocked.map((v) => v.name).join(', '),
+          ),
+    evidence: retrievalBlocked.map((v) =>
+      m.retrievalBots.evidence(v.name, v.rule ?? '', v.matchedGroup ?? '*'),
     ),
     fix:
       retrievalBlocked.length === 0
         ? undefined
-        : `Add explicit allow groups above your wildcard rules in /robots.txt. Retrieval agents fetch a page only because a user asked something it answers, so blocking them removes you from the answer, not from training:\n\n${allowSnippet(
-            retrievalBlocked.map((v) => v.name),
-          )}`,
+        : m.retrievalBots.fix(retrievalBlocked.map((v) => v.name)),
   });
 
   // --- Indexing bots ---------------------------------------------------------
   const indexing = verdicts.filter((v) => v.purpose === 'indexing');
   const indexingBlocked = indexing.filter((v) => !v.allowed);
-  const indexingWeight = indexing.reduce((sum, v) => sum + weightOf(v.id), 0);
-  const indexingLost = indexingBlocked.reduce((sum, v) => sum + weightOf(v.id), 0);
-  const indexingRatio = indexingWeight === 0 ? 0 : indexingLost / indexingWeight;
+  const indexingRatio = blockedRatio(indexing);
 
   results.push({
     id: 'indexing-bots-allowed',
-    title: 'AI search indexers can crawl this page',
+    title: m.indexingBots.title,
     category: 'crawler-access',
     status: indexingBlocked.length === 0 ? 'pass' : indexingRatio > 0.4 ? 'fail' : 'warn',
     score: 1 - indexingRatio,
@@ -109,15 +105,11 @@ export function crawlerAccessChecks(ctx: CheckContext): CheckResult[] {
     impact: 'critical',
     summary:
       indexingBlocked.length === 0
-        ? `All ${indexing.length} answer-engine indexers are allowed.`
-        : `Blocked indexers: ${indexingBlocked.map((v) => v.name).join(', ')}. You will not show up in their sources list.`,
-    evidence: indexingBlocked.map((v) => `${v.name} blocked by "${v.rule}"`),
+        ? m.indexingBots.ok(indexing.length)
+        : m.indexingBots.blocked(indexingBlocked.map((v) => v.name).join(', ')),
+    evidence: indexingBlocked.map((v) => m.indexingBots.evidence(v.name, v.rule ?? '')),
     fix:
-      indexingBlocked.length === 0
-        ? undefined
-        : `These crawlers build the index answer engines cite from. Allow them explicitly:\n\n${allowSnippet(
-            indexingBlocked.map((v) => v.name),
-          )}`,
+      indexingBlocked.length === 0 ? undefined : m.indexingBots.fix(indexingBlocked.map((v) => v.name)),
   });
 
   // --- Training bots: informational, blocking them is a valid choice ---------
@@ -126,7 +118,7 @@ export function crawlerAccessChecks(ctx: CheckContext): CheckResult[] {
 
   results.push({
     id: 'training-bots-policy',
-    title: 'Training-crawler policy is deliberate',
+    title: m.trainingBots.title,
     category: 'crawler-access',
     status: trainingBlocked.length === 0 ? 'pass' : 'info',
     score: trainingBlocked.length === 0 ? 1 : 0.7,
@@ -134,15 +126,10 @@ export function crawlerAccessChecks(ctx: CheckContext): CheckResult[] {
     impact: 'low',
     summary:
       trainingBlocked.length === 0
-        ? 'All training crawlers are allowed, which maximises long-term brand presence inside the models themselves.'
-        : `${trainingBlocked.length} training crawler(s) blocked (${trainingBlocked
-            .map((v) => v.name)
-            .join(', ')}). That is a legitimate licensing stance as long as it is intentional.`,
-    evidence: training.map((v) => `${v.name}: ${v.allowed ? 'allowed' : 'blocked'}`),
-    fix:
-      trainingBlocked.length === 0
-        ? undefined
-        : 'If this block was accidental, it usually comes from a broad wildcard group. Note that it also keeps you out of the model weights that answer questions offline, where no citation opportunity exists at all.',
+        ? m.trainingBots.ok
+        : m.trainingBots.blocked(trainingBlocked.length, trainingBlocked.map((v) => v.name).join(', ')),
+    evidence: training.map((v) => m.trainingBots.state(v.name, v.allowed)),
+    fix: trainingBlocked.length === 0 ? undefined : m.trainingBots.fix,
   });
 
   // --- Page-level opt-out signals -------------------------------------------
@@ -154,26 +141,18 @@ export function crawlerAccessChecks(ctx: CheckContext): CheckResult[] {
 
   results.push({
     id: 'page-level-opt-out',
-    title: 'No page-level noindex or noai directive',
+    title: m.pageOptOut.title,
     category: 'crawler-access',
     status: hasNoindex ? 'fail' : hasNoai ? 'warn' : 'pass',
     score: hasNoindex ? 0 : hasNoai ? 0.5 : 1,
     weight: 8,
     impact: hasNoindex ? 'critical' : 'medium',
-    summary: hasNoindex
-      ? 'This page carries a noindex directive, so it is invisible to every search and answer engine.'
-      : hasNoai
-        ? 'A noai/noimageai directive asks AI systems not to use this content.'
-        : 'No directive is suppressing this page.',
+    summary: hasNoindex ? m.pageOptOut.noindex : hasNoai ? m.pageOptOut.noai : m.pageOptOut.ok,
     evidence: [
-      metaRobots ? `meta robots: ${metaRobots}` : 'No meta robots tag',
-      xRobots ? `X-Robots-Tag: ${xRobots}` : 'No X-Robots-Tag header',
+      metaRobots ? m.pageOptOut.meta(metaRobots) : m.pageOptOut.noMeta,
+      xRobots ? m.pageOptOut.header(xRobots) : m.pageOptOut.noHeader,
     ],
-    fix: hasNoindex
-      ? 'Remove `noindex` from both the meta robots tag and the X-Robots-Tag response header. This one directive cancels every other optimisation on the page.'
-      : hasNoai
-        ? 'Drop `noai` if you want assistants to quote this page; keep it if the opt-out is deliberate.'
-        : undefined,
+    fix: hasNoindex ? m.pageOptOut.fixNoindex : hasNoai ? m.pageOptOut.fixNoai : undefined,
   });
 
   return results;

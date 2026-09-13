@@ -6,7 +6,11 @@
  *
  * Checks never perform I/O themselves: everything the network provides is captured
  * once into a `PageSnapshot`, which keeps checks deterministic and unit-testable.
+ * Human-readable text comes from `ctx.t`, the dictionary for the requested locale.
  */
+
+import type { AuditMessages } from '@/i18n/audit/en';
+import type { Locale } from '@/i18n/config';
 
 export type CheckStatus = 'pass' | 'warn' | 'fail' | 'info';
 
@@ -20,50 +24,20 @@ export type CategoryId =
 
 export interface Category {
   id: CategoryId;
-  label: string;
   /** Share of the final score, in points. All weights sum to 100. */
   weight: number;
-  description: string;
 }
 
 export const CATEGORIES: readonly Category[] = [
-  {
-    id: 'crawler-access',
-    label: 'AI Crawler Access',
-    weight: 30,
-    description: 'Whether AI agents are actually allowed to fetch this page at all.',
-  },
-  {
-    id: 'machine-readability',
-    label: 'Machine Readability',
-    weight: 20,
-    description: 'Whether the content exists in the raw HTML, without running JavaScript.',
-  },
-  {
-    id: 'structured-data',
-    label: 'Structured Data',
-    weight: 15,
-    description: 'Machine-readable facts about the entity, author and freshness.',
-  },
-  {
-    id: 'answerability',
-    label: 'Answerability',
-    weight: 15,
-    description: 'Whether the content is shaped into quotable, extractable answers.',
-  },
-  {
-    id: 'identity',
-    label: 'Metadata & Identity',
-    weight: 10,
-    description: 'How the page introduces itself in previews and citations.',
-  },
-  {
-    id: 'technical',
-    label: 'Technical Health',
-    weight: 10,
-    description: 'Transport, response and indexing signals that can silently hide a page.',
-  },
+  { id: 'crawler-access', weight: 30 },
+  { id: 'machine-readability', weight: 20 },
+  { id: 'structured-data', weight: 15 },
+  { id: 'answerability', weight: 15 },
+  { id: 'identity', weight: 10 },
+  { id: 'technical', weight: 10 },
 ] as const;
+
+export type Impact = 'critical' | 'high' | 'medium' | 'low';
 
 export interface CheckResult {
   /** Stable machine id, safe to use in CI assertions. */
@@ -79,10 +53,10 @@ export interface CheckResult {
   summary: string;
   /** What we actually observed (URLs, header values, counts). */
   evidence?: string[];
-  /** Concrete instruction, often including a code snippet. Gated on free plan. */
+  /** Concrete instruction, often including a code snippet. Gated on the free plan. */
   fix?: string;
   /** Business impact, used to sort the "fix these first" list. */
-  impact: 'critical' | 'high' | 'medium' | 'low';
+  impact: Impact;
   /** Set when remediation detail was withheld behind the paywall. */
   locked?: boolean;
 }
@@ -90,6 +64,7 @@ export interface CheckResult {
 export interface CategoryScore {
   id: CategoryId;
   label: string;
+  description: string;
   weight: number;
   /** 0..100 within the category. */
   score: number;
@@ -98,7 +73,21 @@ export interface CategoryScore {
 
 export type Grade = 'A' | 'B' | 'C' | 'D' | 'F';
 
+export interface CrawlerVerdict {
+  id: string;
+  name: string;
+  vendor: string;
+  purpose: 'training' | 'retrieval' | 'indexing';
+  allowed: boolean;
+  /** The robots.txt rule that decided it, if any. */
+  rule: string | null;
+  matchedGroup: string | null;
+}
+
 export interface AuditReport {
+  /** Public share id, present once the scan has been stored. */
+  id?: string;
+  locale: Locale;
   url: string;
   finalUrl: string;
   scannedAt: string;
@@ -117,17 +106,6 @@ export interface AuditReport {
   warnings: string[];
 }
 
-export interface CrawlerVerdict {
-  id: string;
-  name: string;
-  vendor: string;
-  purpose: 'training' | 'retrieval' | 'indexing';
-  allowed: boolean;
-  /** The robots.txt rule that decided it, if any. */
-  rule: string | null;
-  matchedGroup: string | null;
-}
-
 export interface FetchedResource {
   url: string;
   ok: boolean;
@@ -136,6 +114,7 @@ export interface FetchedResource {
   body: string;
   /** Total wall time of the request, ms. */
   elapsedMs: number;
+  /** Machine-readable failure reason: 'timeout' or a raw network message. */
   error?: string;
 }
 
@@ -148,7 +127,6 @@ export interface PageSnapshot {
   llmsTxt: FetchedResource | null;
   sitemap: FetchedResource | null;
   redirectChainLength: number;
-  warnings: string[];
 }
 
 export interface CheckContext {
@@ -158,4 +136,5 @@ export interface CheckContext {
   /** Visible text extracted from the server-rendered HTML. */
   text: string;
   wordCount: number;
+  t: AuditMessages;
 }
