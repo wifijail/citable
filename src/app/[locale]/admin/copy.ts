@@ -1,0 +1,138 @@
+import type { Locale } from '@/i18n/config';
+
+/** Owner-only screens: English and Russian; other locales fall back to English. */
+const en = {
+  title: 'Admin',
+  notConfigured:
+    'The admin panel is disabled. Set ADMIN_PASSWORD (at least 10 characters) in your environment variables and redeploy.',
+  password: 'Password',
+  signIn: 'Sign in',
+  signOut: 'Sign out',
+  errors: {
+    wrong_password: 'Wrong password.',
+    rate_limited: 'Too many attempts. Try again in 15 minutes.',
+    unauthorized: 'Session expired. Sign in again.',
+    missing_license_secret: 'Set LICENSE_SECRET first — keys cannot be issued without it.',
+    invalid_input: 'Check the email and the number of days.',
+  } as Record<string, string>,
+  setup: 'Setup checklist',
+  setupItems: {
+    database: 'Database (DATABASE_URL)',
+    databaseMemory: 'No database — data is kept in memory and lost on restart',
+    payments: 'Payments (Lemon Squeezy or Stripe)',
+    licensing: 'License signing (LICENSE_SECRET)',
+    email: 'Email delivery (RESEND_API_KEY + EMAIL_FROM)',
+    legal: 'Legal identity & contact email (NEXT_PUBLIC_LEGAL_* / NEXT_PUBLIC_CONTACT_EMAIL)',
+  },
+  stats: {
+    scans24h: 'Scans, last 24h',
+    scansTotal: 'Scans, total',
+    leads: 'Leads',
+    contacts: 'Messages',
+    active: 'Active licenses',
+    mrr: 'Estimated MRR',
+  },
+  issue: {
+    title: 'Issue a license manually',
+    hint: 'For payments received outside the checkout (bank transfer, invoice) or giveaways. The key is emailed if email is configured.',
+    email: 'Customer email',
+    product: 'Plan',
+    days: 'Valid for, days (0 = no expiry)',
+    note: 'Note (optional)',
+    submit: 'Issue key',
+    done: 'License issued:',
+  },
+  tables: {
+    licenses: 'Licenses',
+    leads: 'Leads',
+    contacts: 'Messages',
+    scans: 'Recent scans',
+    exportCsv: 'Export CSV',
+    empty: 'Nothing yet.',
+    revoke: 'Revoke',
+    date: 'Date',
+    email: 'Email',
+    plan: 'Plan',
+    status: 'Status',
+    provider: 'Source',
+    key: 'Key',
+    until: 'Until',
+    source: 'Source',
+    url: 'URL',
+    score: 'Score',
+    name: 'Name',
+    topic: 'Topic',
+    message: 'Message',
+  },
+};
+
+const ru: typeof en = {
+  title: 'Админ-панель',
+  notConfigured:
+    'Админ-панель выключена. Добавьте ADMIN_PASSWORD (не короче 10 символов) в переменные окружения и сделайте повторный деплой.',
+  password: 'Пароль',
+  signIn: 'Войти',
+  signOut: 'Выйти',
+  errors: {
+    wrong_password: 'Неверный пароль.',
+    rate_limited: 'Слишком много попыток. Попробуйте через 15 минут.',
+    unauthorized: 'Сессия истекла. Войдите снова.',
+    missing_license_secret: 'Сначала задайте LICENSE_SECRET — без него ключи не выдаются.',
+    invalid_input: 'Проверьте почту и количество дней.',
+  },
+  setup: 'Чек-лист настройки',
+  setupItems: {
+    database: 'База данных (DATABASE_URL)',
+    databaseMemory: 'Базы нет — данные хранятся в памяти и пропадают при перезапуске',
+    payments: 'Оплата (Lemon Squeezy или Stripe)',
+    licensing: 'Подпись ключей (LICENSE_SECRET)',
+    email: 'Отправка писем (RESEND_API_KEY + EMAIL_FROM)',
+    legal: 'Юр. данные и контактная почта (NEXT_PUBLIC_LEGAL_* / NEXT_PUBLIC_CONTACT_EMAIL)',
+  },
+  stats: {
+    scans24h: 'Проверок за 24 ч',
+    scansTotal: 'Проверок всего',
+    leads: 'Заявки (email)',
+    contacts: 'Сообщения',
+    active: 'Активные лицензии',
+    mrr: 'Примерный MRR',
+  },
+  issue: {
+    title: 'Выдать лицензию вручную',
+    hint: 'Для оплат мимо checkout (перевод, счёт) или подарков. Если почта настроена, ключ уйдёт клиенту письмом.',
+    email: 'Почта клиента',
+    product: 'Тариф',
+    days: 'Срок действия, дней (0 = бессрочно)',
+    note: 'Заметка (необязательно)',
+    submit: 'Выдать ключ',
+    done: 'Лицензия выдана:',
+  },
+  tables: {
+    licenses: 'Лицензии',
+    leads: 'Заявки',
+    contacts: 'Сообщения',
+    scans: 'Последние проверки',
+    exportCsv: 'Скачать CSV',
+    empty: 'Пока пусто.',
+    revoke: 'Отозвать',
+    date: 'Дата',
+    email: 'Почта',
+    plan: 'Тариф',
+    status: 'Статус',
+    provider: 'Источник',
+    key: 'Ключ',
+    until: 'До',
+    source: 'Источник',
+    url: 'Адрес',
+    score: 'Оценка',
+    name: 'Имя',
+    topic: 'Тема',
+    message: 'Сообщение',
+  },
+};
+
+export type AdminCopy = typeof en;
+
+export function getAdminCopy(locale: Locale): AdminCopy {
+  return locale === 'ru' ? ru : en;
+}
