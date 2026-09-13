@@ -86,6 +86,30 @@ export function findPlan(id: string): PlanDefinition | undefined {
   return PLANS.find((plan) => plan.id === id);
 }
 
+/**
+ * Absolute public origin of the site, never empty.
+ *
+ * An env var that exists but is blank (common when pasting .env.example into the
+ * Vercel dashboard) must fall through too — `??` would keep the empty string and
+ * `new URL('')` then throws during `next build`, which is exactly how the first
+ * Vercel deployment failed.
+ */
 export function siteUrl(): string {
-  return (process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000').replace(/\/$/, '');
+  const candidates = [
+    process.env.NEXT_PUBLIC_SITE_URL,
+    process.env.VERCEL_PROJECT_PRODUCTION_URL,
+    process.env.VERCEL_URL,
+  ];
+
+  for (const raw of candidates) {
+    const value = raw?.trim();
+    if (!value) continue;
+    const withScheme = /^https?:\/\//i.test(value) ? value : `https://${value}`;
+    try {
+      return new URL(withScheme).origin;
+    } catch {
+      // Malformed value: try the next candidate instead of failing the build.
+    }
+  }
+  return 'http://localhost:3000';
 }
