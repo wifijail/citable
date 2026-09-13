@@ -43,3 +43,6 @@ logs/
 Thumbs.db
 desktop.ini
 *.swp
+
+# local editor / agent tooling
+.claude/
