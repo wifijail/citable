@@ -2,19 +2,23 @@
 
 import { Check, Loader2, Send } from 'lucide-react';
 import { useState } from 'react';
+import { ConsentCheckbox } from './consent-checkbox';
 import { useI18n } from './providers';
 
-type Topic = 'sales' | 'support' | 'billing' | 'partnership' | 'other';
+type Topic = 'sales' | 'support' | 'billing' | 'privacy' | 'other';
 
 export function ContactForm() {
   const { locale, t } = useI18n();
   const f = t.contact.form;
   const [state, setState] = useState<'idle' | 'sending' | 'done' | 'error' | 'limited'>('idle');
   const [message, setMessage] = useState('');
+  const [consent, setConsent] = useState(false);
+  const [triedSubmit, setTriedSubmit] = useState(false);
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (state === 'sending') return;
+    setTriedSubmit(true);
+    if (state === 'sending' || !consent) return;
     const form = new FormData(event.currentTarget);
     setState('sending');
     try {
@@ -22,11 +26,12 @@ export function ContactForm() {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          name: form.get('name'),
+          name: form.get('name') || undefined,
           email: form.get('email'),
           topic: form.get('topic') as Topic,
           message: form.get('message'),
           company: form.get('company') || undefined,
+          consent,
           locale,
         }),
       });
@@ -55,18 +60,22 @@ export function ContactForm() {
 
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="block space-y-1.5">
-          <span className="text-sm font-medium">{f.name}</span>
-          <input name="name" required maxLength={120} autoComplete="name" className="input" />
+          <span className="text-sm font-medium">
+            {f.email} <span className="text-fail">*</span>
+          </span>
+          <input name="email" type="email" required maxLength={200} autoComplete="email" className="input" />
         </label>
         <label className="block space-y-1.5">
-          <span className="text-sm font-medium">{f.email}</span>
-          <input name="email" type="email" required maxLength={200} autoComplete="email" className="input" />
+          <span className="text-sm font-medium">
+            {f.name} <span className="font-normal text-faint">({t.common.optional})</span>
+          </span>
+          <input name="name" maxLength={120} autoComplete="name" className="input" />
         </label>
       </div>
 
       <label className="block space-y-1.5">
         <span className="text-sm font-medium">{f.topic}</span>
-        <select name="topic" defaultValue="sales" className="input appearance-none">
+        <select name="topic" defaultValue="support" className="input appearance-none">
           {(Object.keys(f.topics) as Topic[]).map((topic) => (
             <option key={topic} value={topic}>
               {f.topics[topic]}
@@ -76,7 +85,9 @@ export function ContactForm() {
       </label>
 
       <label className="block space-y-1.5">
-        <span className="text-sm font-medium">{f.message}</span>
+        <span className="text-sm font-medium">
+          {f.message} <span className="text-fail">*</span>
+        </span>
         <textarea
           name="message"
           required
@@ -89,6 +100,8 @@ export function ContactForm() {
           className="input resize-y"
         />
       </label>
+
+      <ConsentCheckbox checked={consent} onChange={setConsent} showError={triedSubmit} />
 
       <div className="flex flex-wrap items-center gap-3">
         <button type="submit" className="btn-accent" disabled={state === 'sending'}>

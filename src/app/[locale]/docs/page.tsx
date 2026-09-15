@@ -27,7 +27,7 @@ export default async function DocsPage({ params }: Props) {
   const curl = `curl -X POST ${base}/api/v1/scan \\
   -H "Authorization: Bearer $CITABLE_KEY" \\
   -H "Content-Type: application/json" \\
-  -d '{"url": "https://example.com/pricing", "minScore": 70, "lang": "${locale}"}'`;
+  -d '{"url": "https://example.com", "minScore": 70, "lang": "${locale}", "options": {"mode": "site", "engines": ["openai", "google"]}}'`;
 
   const response = `{
   "url": "https://example.com/pricing",
@@ -58,6 +58,7 @@ jobs:
     { field: 'url', type: 'string', description: t.docs.paramUrl },
     { field: 'minScore', type: 'number', description: t.docs.paramMinScore },
     { field: 'lang', type: 'string', description: t.docs.paramLang },
+    { field: 'options', type: 'object', description: t.docs.paramOptions },
   ];
   const codes = [
     ['200', t.docs.code200],
@@ -81,7 +82,7 @@ jobs:
       <Reveal className="card mt-12 p-6 sm:p-8">
         <p className="font-mono text-xs uppercase tracking-widest text-faint">{t.docs.endpoint}</p>
         <p className="mt-2 font-mono text-lg">
-          <span className="rounded-md bg-accent/10 px-2 py-0.5 text-accent">POST</span> /api/v1/scan
+          <span className="rounded-md bg-surface-2 px-2 py-0.5 text-fg">POST</span> /api/v1/scan
         </p>
         <p className="mt-3 text-muted">{t.docs.auth}</p>
 
@@ -101,7 +102,7 @@ jobs:
             <tbody className="divide-y divide-line">
               {parameters.map((row) => (
                 <tr key={row.field}>
-                  <td className="px-4 py-3 font-mono text-accent">{row.field}</td>
+                  <td className="px-4 py-3 font-mono text-fg">{row.field}</td>
                   <td className="px-4 py-3 text-faint">{row.type}</td>
                   <td className="px-4 py-3 text-muted">{row.description}</td>
                 </tr>
@@ -117,7 +118,7 @@ jobs:
         <ul className="mt-3 grid gap-2 sm:grid-cols-2">
           {codes.map(([code, description]) => (
             <li key={code} className="flex items-center gap-3 rounded-lg border border-line px-3 py-2 text-sm">
-              <code className="font-mono text-accent">{code}</code>
+              <code className="font-mono text-fg">{code}</code>
               <span className="text-muted">{description}</span>
             </li>
           ))}
@@ -135,7 +136,7 @@ jobs:
         <ul className="mt-5 space-y-3">
           {CATEGORIES.map((category) => (
             <li key={category.id} className="grid grid-cols-[4rem_1fr] items-baseline gap-3">
-              <span className="font-mono text-sm text-accent">
+              <span className="font-mono text-sm text-faint">
                 {category.weight} {t.report.points}
               </span>
               <span>

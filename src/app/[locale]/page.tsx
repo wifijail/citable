@@ -1,20 +1,4 @@
-import {
-  ArrowRight,
-  BadgeCheck,
-  Bot,
-  Braces,
-  EyeOff,
-  FileCode2,
-  Gauge,
-  Link2,
-  MessageSquareQuote,
-  Quote,
-  ScanSearch,
-  ShieldCheck,
-  Sparkles,
-  TrendingDown,
-  WandSparkles,
-} from 'lucide-react';
+import { ArrowRight, BadgeCheck, Bot, Braces, Code2, FileCode2, Gauge, MessageSquareQuote } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { CrawlerGlobe } from '@/components/landing/crawler-globe';
@@ -23,11 +7,14 @@ import { Pricing } from '@/components/landing/pricing';
 import { ScanProvider } from '@/components/report/scan-context';
 import { ScanResults } from '@/components/report/scan-results';
 import { ScannerForm } from '@/components/report/scanner-form';
-import { AnimatedNumber, LogoCube, Marquee, Reveal, SpotlightCard } from '@/components/ui/motion';
+import { Reveal } from '@/components/ui/motion';
 import { getAuditMessages } from '@/i18n/audit';
 import { isLocale } from '@/i18n/config';
 import { getDictionary } from '@/i18n/ui';
+import { freeDailyLimit } from '@/lib/access';
 import { AI_CRAWLERS } from '@/lib/audit/crawlers';
+import { SITE_PAGE_LIMITS } from '@/lib/audit/limits';
+import { CHECK_COUNT } from '@/lib/audit/registry';
 import { CATEGORIES, type CategoryId } from '@/lib/audit/types';
 
 const CATEGORY_ICONS: Record<CategoryId, typeof Bot> = {
@@ -39,9 +26,15 @@ const CATEGORY_ICONS: Record<CategoryId, typeof Bot> = {
   technical: Gauge,
 };
 
+const PURPOSE_DOT = {
+  retrieval: 'bg-pass',
+  indexing: 'bg-info',
+  training: 'bg-faint',
+} as const;
+
 function SectionHeading({ eyebrow, title, subtitle }: { eyebrow: string; title: string; subtitle?: string }) {
   return (
-    <Reveal className="mx-auto max-w-2xl text-center">
+    <Reveal className="max-w-2xl">
       <p className="eyebrow">{eyebrow}</p>
       <h2 className="mt-3 text-balance text-3xl font-semibold tracking-tight sm:text-4xl">{title}</h2>
       {subtitle && <p className="mt-3 text-pretty text-muted">{subtitle}</p>}
@@ -56,60 +49,37 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
   const audit = getAuditMessages(locale);
   const needsSpace = /^[\p{L}\p{N}]/u.test(t.hero.titleTail);
 
+  const stats = [
+    { value: CHECK_COUNT, label: t.stats.checks },
+    { value: AI_CRAWLERS.length, label: t.stats.agents },
+    { value: CATEGORIES.length, label: t.stats.categories },
+    { value: SITE_PAGE_LIMITS.agency, label: t.stats.pages },
+  ];
+
   return (
     <>
       <ScanProvider>
-        {/* ------------------------------------------------------------ hero */}
-        <section className="relative">
-          <div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
-            <div className="bg-grid absolute inset-0" />
-            <div className="absolute -left-40 top-10 h-[28rem] w-[28rem] animate-aurora rounded-full bg-accent/20 blur-[110px]" />
-            <div className="absolute -right-32 top-40 h-[24rem] w-[24rem] animate-aurora rounded-full bg-mint/15 blur-[110px] [animation-delay:-8s]" />
-          </div>
-
-          <div className="container-page grid items-center gap-10 pb-10 pt-12 sm:pt-20 lg:grid-cols-[1.05fr_1fr] lg:gap-6">
+        <section className="relative border-b border-line">
+          <div className="bg-grid pointer-events-none absolute inset-0 -z-10" />
+          <div className="container-page grid items-center gap-10 pb-14 pt-12 sm:pt-20 lg:grid-cols-[1.1fr_1fr] lg:gap-8">
             <div>
-              <div className="animate-fade-up">
-                <span className="inline-flex items-center gap-2 rounded-full border border-line bg-surface/70 px-3 py-1 text-xs text-muted backdrop-blur">
-                  <Sparkles className="h-3.5 w-3.5 text-accent" />
-                  {t.hero.badge}
-                </span>
-              </div>
-              <div className="animate-fade-up [animation-delay:60ms]">
-                <h1 className="mt-5 text-balance text-4xl font-semibold leading-[1.05] tracking-tight sm:text-6xl">
-                  {t.hero.titleLead} <span className="text-gradient">{t.hero.titleAccent}</span>
-                  {needsSpace ? ' ' : ''}
-                  {t.hero.titleTail}
-                </h1>
-              </div>
-              <div className="animate-fade-up [animation-delay:120ms]">
-                <p className="mt-5 max-w-xl text-pretty text-lg leading-relaxed text-muted">{t.hero.subtitle}</p>
-              </div>
+              <p className="animate-fade-up font-mono text-xs text-muted">{t.hero.badge(CHECK_COUNT, AI_CRAWLERS.length)}</p>
+              <h1 className="mt-4 animate-fade-up text-balance text-4xl font-semibold leading-[1.05] tracking-tight [animation-delay:60ms] sm:text-6xl">
+                {t.hero.titleLead} <span className="underline decoration-accent decoration-4 underline-offset-[0.18em]">{t.hero.titleAccent}</span>
+                {needsSpace ? ' ' : ''}
+                {t.hero.titleTail}
+              </h1>
+              <p className="mt-5 max-w-xl animate-fade-up text-pretty text-lg leading-relaxed text-muted [animation-delay:120ms]">
+                {t.hero.subtitle}
+              </p>
               <div className="mt-8 max-w-xl animate-fade-up [animation-delay:180ms]">
                 <ScannerForm />
               </div>
-              <div className="animate-fade-up [animation-delay:240ms]">
-                <p className="mt-5 flex items-center gap-2 text-sm text-faint">
-                  <ShieldCheck className="h-4 w-4 text-pass" />
-                  {t.hero.trust}
-                </p>
-              </div>
+              <p className="mt-5 animate-fade-up text-sm text-faint [animation-delay:240ms]">{t.hero.trust(freeDailyLimit())}</p>
             </div>
 
-            <div className="relative mx-auto aspect-square w-full max-w-[560px] animate-fade-up [animation-delay:150ms]">
+            <div className="relative mx-auto aspect-square w-full max-w-[520px] animate-fade-up [animation-delay:150ms]">
               <CrawlerGlobe label={t.hero.globeLabel} />
-              <div className="pointer-events-none absolute bottom-[12%] left-0 hidden animate-float rounded-xl border border-line bg-surface/85 px-3 py-2 shadow-card backdrop-blur sm:block">
-                <p className="font-mono text-[11px] text-faint">robots.txt</p>
-                <p className="text-sm">
-                  ChatGPT-User <span className="text-pass">✓ allow</span>
-                </p>
-              </div>
-              <div className="pointer-events-none absolute right-0 top-[14%] hidden animate-float rounded-xl border border-line bg-surface/85 px-3 py-2 shadow-card backdrop-blur [animation-delay:-3s] sm:block">
-                <p className="font-mono text-[11px] text-faint">AI Visibility</p>
-                <p className="text-sm font-semibold">
-                  82 <span className="font-normal text-faint">/ 100</span>
-                </p>
-              </div>
             </div>
           </div>
         </section>
@@ -117,124 +87,70 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
         <ScanResults />
       </ScanProvider>
 
-      {/* --------------------------------------------------------- marquee */}
-      <section className="mt-16 border-y border-line bg-subtle/60 py-6">
-        <p className="container-page mb-4 text-center font-mono text-xs uppercase tracking-[0.18em] text-faint">
-          {t.marquee.label}
-        </p>
-        <Marquee>
-          {AI_CRAWLERS.map((crawler) => (
-            <span
-              key={crawler.id}
-              className="inline-flex items-center gap-2 whitespace-nowrap rounded-full border border-line bg-surface px-3.5 py-1.5 text-sm"
-            >
-              <span
-                className={
-                  crawler.purpose === 'retrieval'
-                    ? 'h-1.5 w-1.5 rounded-full bg-mint'
-                    : crawler.purpose === 'indexing'
-                      ? 'h-1.5 w-1.5 rounded-full bg-accent'
-                      : 'h-1.5 w-1.5 rounded-full bg-faint'
-                }
-              />
-              <span className="font-mono">{crawler.name}</span>
-              <span className="text-faint">{crawler.vendor}</span>
-            </span>
-          ))}
-        </Marquee>
-      </section>
-
-      {/* ----------------------------------------------------------- stats */}
-      <section className="container-page py-16">
-        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-line bg-line lg:grid-cols-4">
-          {[
-            { value: 31, label: t.stats.checks },
-            { value: AI_CRAWLERS.length, label: t.stats.agents },
-            { value: CATEGORIES.length, label: t.stats.categories },
-            { value: 5, label: t.stats.seconds, prefix: '~' },
-          ].map((stat) => (
-            <div key={stat.label} className="bg-surface px-6 py-8 text-center">
-              <p className="text-4xl font-semibold tracking-tight sm:text-5xl">
-                {stat.prefix}
-                <AnimatedNumber value={stat.value} />
-              </p>
-              <p className="mt-2 text-sm text-muted">{stat.label}</p>
+      {/* Facts taken from the code, not marketing numbers. */}
+      <section className="container-page pt-16">
+        <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-line bg-line lg:grid-cols-4">
+          {stats.map((stat) => (
+            <div key={stat.label} className="bg-surface px-6 py-7">
+              <dt className="text-sm text-muted">{stat.label}</dt>
+              <dd className="mt-1 text-4xl font-semibold tabular-nums tracking-tight">{stat.value}</dd>
             </div>
           ))}
-        </div>
+        </dl>
       </section>
 
-      {/* --------------------------------------------------------- problem */}
       <section id="features" className="container-page scroll-mt-24 py-16">
         <SectionHeading eyebrow={t.problem.eyebrow} title={t.problem.title} />
-        <div className="mt-12 grid gap-4 md:grid-cols-3">
-          {t.problem.items.map((item, index) => {
-            const Icon = [TrendingDown, EyeOff, Quote][index] ?? Quote;
-            return (
-              <Reveal key={item.title} delay={index * 0.08}>
-                <SpotlightCard className="h-full p-6">
-                  <span className="grid h-10 w-10 place-items-center rounded-xl border border-line bg-surface-2">
-                    <Icon className="h-5 w-5 text-accent" />
-                  </span>
-                  <h3 className="mt-5 text-lg font-semibold">{item.title}</h3>
-                  <p className="mt-2 leading-relaxed text-muted">{item.body}</p>
-                </SpotlightCard>
-              </Reveal>
-            );
-          })}
+        <div className="mt-10 grid gap-4 md:grid-cols-3">
+          {t.problem.items.map((item, index) => (
+            <Reveal key={item.title} delay={index * 0.06}>
+              <div className="card h-full p-6">
+                <p className="font-mono text-xs text-faint">0{index + 1}</p>
+                <h3 className="mt-3 text-lg font-semibold">{item.title}</h3>
+                <p className="mt-2 leading-relaxed text-muted">{item.body}</p>
+              </div>
+            </Reveal>
+          ))}
         </div>
       </section>
 
-      {/* ----------------------------------------------------------- steps */}
       <section className="container-page py-16">
         <SectionHeading eyebrow={t.steps.eyebrow} title={t.steps.title} />
-        <div className="relative mt-14 grid gap-8 md:grid-cols-3">
-          <div className="absolute left-[16%] right-[16%] top-6 hidden h-px bg-gradient-to-r from-transparent via-accent/50 to-transparent md:block" />
-          {t.steps.items.map((step, index) => {
-            const Icon = [Link2, ScanSearch, WandSparkles][index] ?? Link2;
-            return (
-              <Reveal key={step.title} delay={index * 0.1} className="relative text-center">
-                <span className="relative mx-auto grid h-12 w-12 place-items-center rounded-2xl border border-line bg-surface shadow-card">
-                  <Icon className="h-5 w-5 text-accent" />
-                  <span className="absolute -right-2 -top-2 grid h-5 w-5 place-items-center rounded-full bg-fg font-mono text-[10px] text-bg">
-                    {index + 1}
-                  </span>
-                </span>
-                <h3 className="mt-5 text-lg font-semibold">{step.title}</h3>
-                <p className="mx-auto mt-2 max-w-xs leading-relaxed text-muted">{step.body}</p>
-              </Reveal>
-            );
-          })}
-        </div>
+        <ol className="mt-10 grid gap-px overflow-hidden rounded-2xl border border-line bg-line md:grid-cols-3">
+          {t.steps.items.map((step, index) => (
+            <li key={step.title} className="bg-surface p-6">
+              <span className="grid h-7 w-7 place-items-center rounded-full bg-fg font-mono text-xs text-bg">{index + 1}</span>
+              <h3 className="mt-4 font-semibold">{step.title}</h3>
+              <p className="mt-2 text-sm leading-relaxed text-muted">{step.body}</p>
+            </li>
+          ))}
+        </ol>
       </section>
 
-      {/* ------------------------------------------------------ categories */}
       <section className="container-page py-16">
-        <SectionHeading eyebrow={t.categories.eyebrow} title={t.categories.title} subtitle={t.categories.subtitle} />
-        <div className="mt-12 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <SectionHeading eyebrow={t.categories.eyebrow} title={t.categories.title} subtitle={t.categories.subtitle} />
+          <Link href={`/${locale}/methodology`} className="btn-ghost">
+            {t.categories.methodologyLink}
+            <ArrowRight className="h-4 w-4" />
+          </Link>
+        </div>
+        <div className="mt-10 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {CATEGORIES.map((category, index) => {
             const Icon = CATEGORY_ICONS[category.id];
             const copy = audit.categories[category.id];
             return (
-              <Reveal key={category.id} delay={index * 0.05}>
-                <SpotlightCard className="h-full p-6">
+              <Reveal key={category.id} delay={index * 0.04}>
+                <div className="card h-full p-6">
                   <div className="flex items-start justify-between gap-4">
-                    <span className="grid h-10 w-10 place-items-center rounded-xl bg-accent/10">
-                      <Icon className="h-5 w-5 text-accent" />
-                    </span>
+                    <Icon className="h-5 w-5 text-muted" />
                     <span className="font-mono text-sm text-faint">
                       {category.weight} {t.report.points}
                     </span>
                   </div>
-                  <h3 className="mt-5 font-semibold">{copy.label}</h3>
+                  <h3 className="mt-4 font-semibold">{copy.label}</h3>
                   <p className="mt-2 text-sm leading-relaxed text-muted">{copy.description}</p>
-                  <div className="mt-5 h-1 overflow-hidden rounded-full bg-line">
-                    <div
-                      className="h-full rounded-full bg-gradient-to-r from-accent to-mint"
-                      style={{ width: `${(category.weight / 30) * 100}%` }}
-                    />
-                  </div>
-                </SpotlightCard>
+                </div>
               </Reveal>
             );
           })}
@@ -242,51 +158,53 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
 
         <Reveal className="mt-4">
           <div className="card p-6 sm:p-8">
-            <h3 className="font-semibold">{t.agents.title}</h3>
+            <h3 className="flex items-center gap-2 font-semibold">
+              <Code2 className="h-4 w-4 text-muted" />
+              {t.agents.title}
+            </h3>
             <p className="mt-2 max-w-3xl text-sm leading-relaxed text-muted">{t.agents.body}</p>
-            <div className="mt-5 flex flex-wrap gap-2">
+            <ul className="mt-5 flex flex-wrap gap-2">
               {AI_CRAWLERS.map((crawler) => (
-                <span
-                  key={crawler.id}
-                  title={audit.crawlerNotes[crawler.id as keyof typeof audit.crawlerNotes]}
-                  className="pill border border-line bg-surface-2 font-mono text-muted"
-                >
-                  {crawler.name}
+                <li key={crawler.id}>
+                  <a
+                    href={crawler.docs}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={audit.crawlerNotes[crawler.id as keyof typeof audit.crawlerNotes]}
+                    className="pill border border-line bg-surface-2 font-mono text-muted transition hover:border-line-strong hover:text-fg"
+                  >
+                    <span className={`h-1.5 w-1.5 rounded-full ${PURPOSE_DOT[crawler.purpose]}`} />
+                    {crawler.name}
+                  </a>
+                </li>
+              ))}
+            </ul>
+            <div className="mt-5 flex flex-wrap gap-4 text-xs text-faint">
+              {(['retrieval', 'indexing', 'training'] as const).map((purpose) => (
+                <span key={purpose} className="inline-flex items-center gap-1.5">
+                  <span className={`h-2 w-2 rounded-full ${PURPOSE_DOT[purpose]}`} />
+                  {audit.purposes[purpose]}
                 </span>
               ))}
-            </div>
-            <div className="mt-5 flex flex-wrap gap-4 text-xs text-faint">
-              <span className="inline-flex items-center gap-1.5">
-                <span className="h-2 w-2 rounded-full bg-mint" />
-                {audit.purposes.retrieval}
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <span className="h-2 w-2 rounded-full bg-accent" />
-                {audit.purposes.indexing}
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <span className="h-2 w-2 rounded-full bg-faint" />
-                {audit.purposes.training}
-              </span>
             </div>
           </div>
         </Reveal>
       </section>
 
-      {/* --------------------------------------------------------- pricing */}
       <section id="pricing" className="container-page scroll-mt-24 py-16">
         <SectionHeading eyebrow={t.pricing.eyebrow} title={t.pricing.title} subtitle={t.pricing.subtitle} />
-        <div className="mt-12">
+        <div className="mt-10">
           <Pricing />
         </div>
       </section>
 
-      {/* ------------------------------------------------------------- faq */}
       <section className="container-page py-16">
-        <SectionHeading eyebrow={t.faq.eyebrow} title={t.faq.title} />
-        <Reveal className="mx-auto mt-10 max-w-3xl">
-          <Faq />
-        </Reveal>
+        <div className="grid gap-10 lg:grid-cols-[1fr_1.6fr]">
+          <SectionHeading eyebrow={t.faq.eyebrow} title={t.faq.title} />
+          <Reveal>
+            <Faq />
+          </Reveal>
+        </div>
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{
@@ -303,23 +221,17 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
         />
       </section>
 
-      {/* ------------------------------------------------------------- cta */}
-      <section className="container-page pt-8">
-        <Reveal>
-          <div className="relative overflow-hidden rounded-3xl border border-line bg-surface px-6 py-14 text-center shadow-card sm:px-12">
-            <div className="bg-grid pointer-events-none absolute inset-0 opacity-70" />
-            <div className="pointer-events-none absolute left-1/2 top-0 h-64 w-[36rem] -translate-x-1/2 rounded-full bg-accent/20 blur-[100px]" />
-            <div className="relative flex flex-col items-center">
-              <LogoCube size={64} />
-              <h2 className="mt-2 text-balance text-3xl font-semibold tracking-tight sm:text-4xl">{t.cta.title}</h2>
-              <p className="mt-3 max-w-lg text-muted">{t.cta.subtitle}</p>
-              <Link href={`/${locale}#scan`} className="btn-accent mt-7">
-                {t.cta.button}
-                <ArrowRight className="h-4 w-4" />
-              </Link>
-            </div>
+      <section className="container-page pt-4">
+        <div className="flex flex-col items-start justify-between gap-6 rounded-2xl border border-line bg-surface p-8 sm:flex-row sm:items-center sm:p-10">
+          <div>
+            <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">{t.cta.title}</h2>
+            <p className="mt-2 text-muted">{t.cta.subtitle}</p>
           </div>
-        </Reveal>
+          <Link href={`/${locale}#scan`} className="btn-primary">
+            {t.cta.button}
+            <ArrowRight className="h-4 w-4" />
+          </Link>
+        </div>
       </section>
     </>
   );

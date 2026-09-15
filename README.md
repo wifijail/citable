@@ -1,11 +1,12 @@
 # Citable — AI Search Visibility Auditor
 
-**Can AI actually cite your site?** Citable scans any URL and reports whether ChatGPT, Claude,
-Perplexity and Google AI Overviews can reach, read, index and quote it — then hands you the exact
-lines to change when they cannot.
+**Can AI assistants read your site?** Citable fetches a page — or a sample of a whole site — the way
+AI crawlers do, applies its robots.txt to each agent, and lists the problems it finds with a fix for
+each. The score is the project's own heuristic; it does not promise citations.
 
-Live scan, no signup. 31 checks across 6 weighted categories, 16 AI agents evaluated against your
-real `robots.txt`. Interface and findings in English, Russian, Spanish and German.
+54 checks across 6 weighted categories (adapted to the detected site type), 16 AI agents, site mode
+up to 25 pages, generated robots.txt / llms.txt / JSON-LD. Interface and findings in English,
+Russian, Kazakh, Spanish and German.
 
 - **Owner setup guide (Russian, step by step):** [SETUP_RU.md](SETUP_RU.md)
 - **Product, audience, business model:** [PRODUCT_SPEC.md](PRODUCT_SPEC.md)
@@ -17,15 +18,15 @@ real `robots.txt`. Interface and findings in English, Russian, Spanish and Germa
 
 | Area | What is in the box |
 |---|---|
-| Audit engine | RFC 9309 robots.txt parser, 16-agent registry, 31 checks, weighted score and grade |
-| Localisation | `/en`, `/ru`, `/es`, `/de` URLs, browser-language redirect, hreflang sitemap, localised findings |
-| UI | Light / dark / system themes, animated crawler globe (canvas 3D), scroll reveals, spotlight cards, 3D logo cube, reduced-motion support |
+| Audit engine | RFC 9309 robots.txt parser, 16-agent registry with docs links, 54 checks, site profiles, site sampling, generated files |
+| Localisation | `/en`, `/ru`, `/kk`, `/es`, `/de` URLs, browser-language redirect, hreflang sitemap, localised findings |
+| UI | Light / dark / system themes, crawler globe (canvas 3D), scan settings panel, reduced-motion support |
 | Data | Postgres (Neon / Supabase / any), auto-created schema; in-memory fallback for local dev |
-| Monetisation | Lemon Squeezy or Stripe checkout, signed webhooks, license lifecycle (active → cancelled → expired, refunds) |
+| Monetisation | Gumroad license keys verified via Gumroad's API; payment links (Boosty, Patreon…) with manual approval; Lemon Squeezy / Stripe webhooks |
 | Delivery | License shown on the success page and emailed via Resend |
 | Sharing | Stored reports at `/{locale}/r/{id}` with generated Open Graph images |
 | Owner tools | `/{locale}/admin`: setup checklist, stats, leads (CSV), messages, licenses, manual key issuance |
-| Contact & legal | Contact form (stored + emailed), Terms / Privacy / Refund templates filled from env vars |
+| Compliance | Kazakhstan-oriented Terms (public offer), Privacy, Cookie, Refund and Consent documents in ru/kk/en; consent records; retention job; erasure by email |
 | API | `POST /api/v1/scan` with Bearer key and a `minScore` CI gate |
 
 ---
@@ -46,7 +47,7 @@ Open http://localhost:3000 — you are redirected to your browser's language.
 |---|---|
 | `npm run dev` | Development server |
 | `npm run build` / `npm start` | Production build / serve it |
-| `npm test` | Vitest suite (75 tests) |
+| `npm test` | Vitest suite (114 tests with `TEST_DATABASE_URL`) |
 | `npm run typecheck` | `tsc --noEmit`, strict mode |
 | `npm run lint` | ESLint |
 | `npm run verify` | Typecheck → lint → test → build |
@@ -65,9 +66,11 @@ obtain each one. Nothing is required for the site to build.
 | Security | `LICENSE_SECRET`, `ADMIN_PASSWORD` | No checkout; admin panel disabled |
 | Database | `DATABASE_URL` (or `POSTGRES_URL`) | Data kept in memory, lost on restart |
 | Lemon Squeezy | `LEMONSQUEEZY_API_KEY`, `_STORE_ID`, `_WEBHOOK_SECRET`, `_VARIANT_PRO/AGENCY/LIFETIME` | — |
-| Stripe | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_*` | Pricing buttons open a waitlist dialog |
+| Stripe | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_*` | — |
+| Gumroad | `GUMROAD_PRODUCT_ID_*`, `GUMROAD_URL_*` | — |
+| Payment links | `PAYMENT_PLATFORM_NAME`, `PAYMENT_LINK_*` | Pricing buttons open a waitlist dialog |
 | Email | `RESEND_API_KEY`, `EMAIL_FROM`, `OWNER_EMAIL` | Keys shown on screen only |
-| Owner details | `NEXT_PUBLIC_CONTACT_*`, `NEXT_PUBLIC_LEGAL_*` | Hidden; legal pages show a template banner |
+| Owner details | `NEXT_PUBLIC_CONTACT_*`, `NEXT_PUBLIC_LEGAL_*`, `NEXT_PUBLIC_DATA_LOCATION` | Not shown; listed in the admin checklist |
 
 `GET /api/health` reports which integrations are active (never their values).
 
@@ -80,9 +83,9 @@ src/
 ├── middleware.ts                  Locale prefix redirect (cookie → Accept-Language → en)
 ├── config/site.ts                 Owner details, read from env vars
 ├── i18n/
-│   ├── ui/{en,ru,es,de}.ts        Interface copy, typed against the English dictionary
-│   ├── audit/{en,ru,es,de}.ts     Findings, fixes and category copy
-│   ├── legal.ts                   Terms / Privacy / Refund templates
+│   ├── ui/{en,ru,kk,es,de}.ts        Interface copy, typed against the English dictionary
+│   ├── audit/{en,ru,kk,es,de}.ts     Findings, fixes and category copy
+│   ├── legal.ts                   Terms, Privacy, Cookies, Refund, Consent (ru/kk/en)
 │   └── email.ts                   Transactional email copy
 ├── app/
 │   ├── [locale]/                  Home, pricing, docs, contact, legal, shared report, checkout success, admin

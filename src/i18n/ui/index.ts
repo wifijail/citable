@@ -2,9 +2,10 @@ import type { Locale } from '../config';
 import { de } from './de';
 import { en, type Dictionary } from './en';
 import { es } from './es';
+import { kk } from './kk';
 import { ru } from './ru';
 
-const DICTIONARIES: Record<Locale, Dictionary> = { en, ru, es, de };
+const DICTIONARIES: Record<Locale, Dictionary> = { en, ru, kk, es, de };
 
 export function getDictionary(locale: Locale): Dictionary {
   return DICTIONARIES[locale];

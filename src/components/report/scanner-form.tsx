@@ -1,26 +1,46 @@
 'use client';
 
-import { ArrowRight, CircleAlert, CircleCheck, KeyRound, Loader2, Search } from 'lucide-react';
+import { ArrowRight, CircleAlert, CircleCheck, KeyRound, Loader2, Search, SlidersHorizontal } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useState } from 'react';
+import { cn } from '@/lib/cn';
 import { onLicenseChange, readStoredLicense, storeLicense } from '@/lib/license-storage';
 import { useI18n } from '../providers';
 import { useScan } from './scan-context';
+import { ScanOptionsPanel } from './scan-options';
 
-const EXAMPLES = ['stripe.com/pricing', 'vercel.com', 'wikipedia.org'];
+const EXAMPLES = ['wikipedia.org', 'developer.mozilla.org'];
 
 type KeyState =
   | { kind: 'idle' }
   | { kind: 'checking' }
-  | { kind: 'valid'; plan: string }
+  | { kind: 'valid'; plan: 'pro' | 'agency' }
   | { kind: 'invalid' }
   | { kind: 'inactive' };
+
+function Collapse({ open, children }: { open: boolean; children: React.ReactNode }) {
+  return (
+    <AnimatePresence initial={false}>
+      {open && (
+        <motion.div
+          initial={{ height: 0, opacity: 0 }}
+          animate={{ height: 'auto', opacity: 1 }}
+          exit={{ height: 0, opacity: 0 }}
+          className="overflow-hidden"
+        >
+          <div className="pt-3">{children}</div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
 
 export function ScannerForm() {
   const { t } = useI18n();
   const { scan, busy } = useScan();
   const [url, setUrl] = useState('');
   const [showKey, setShowKey] = useState(false);
+  const [showOptions, setShowOptions] = useState(false);
   const [license, setLicense] = useState('');
   const [keyState, setKeyState] = useState<KeyState>({ kind: 'idle' });
 
@@ -49,7 +69,7 @@ export function ScannerForm() {
           body: JSON.stringify({ key }),
         });
         const data = (await response.json()) as { valid?: boolean; plan?: string; problem?: string };
-        if (data.valid && data.plan) setKeyState({ kind: 'valid', plan: data.plan });
+        if (data.valid && (data.plan === 'pro' || data.plan === 'agency')) setKeyState({ kind: 'valid', plan: data.plan });
         else setKeyState({ kind: data.problem === 'inactive' ? 'inactive' : 'invalid' });
       } catch {
         setKeyState({ kind: 'idle' });
@@ -63,6 +83,8 @@ export function ScannerForm() {
     void scan(target);
   };
 
+  const plan = keyState.kind === 'valid' ? keyState.plan : 'free';
+
   return (
     <div id="scan" className="w-full scroll-mt-24">
       <form
@@ -70,7 +92,7 @@ export function ScannerForm() {
           event.preventDefault();
           submit(url);
         }}
-        className="group relative rounded-2xl border border-line bg-surface p-1.5 shadow-card transition focus-within:border-accent focus-within:shadow-glow"
+        className="rounded-2xl border border-line bg-surface p-1.5 shadow-card transition focus-within:border-fg/60"
       >
         <div className="flex flex-col gap-1.5 sm:flex-row">
           <label className="relative flex-1">
@@ -87,8 +109,8 @@ export function ScannerForm() {
               className="h-12 w-full rounded-xl bg-transparent pl-11 pr-3 text-[15px] text-fg outline-none placeholder:text-faint"
             />
           </label>
-          <button type="submit" disabled={busy} className="btn-accent h-12 rounded-xl px-6">
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          <button type="submit" disabled={busy} className="btn-primary h-12 rounded-xl px-6">
+            {busy && <Loader2 className="h-4 w-4 animate-spin" />}
             {busy ? t.scanner.scanning : t.scanner.submit}
             {!busy && <ArrowRight className="h-4 w-4" />}
           </button>
@@ -103,67 +125,72 @@ export function ScannerForm() {
             type="button"
             disabled={busy}
             onClick={() => submit(example)}
-            className="rounded-full border border-line px-2.5 py-0.5 font-mono text-xs text-muted transition hover:border-accent hover:text-fg"
+            className="rounded-full border border-line px-2.5 py-0.5 font-mono text-xs text-muted transition hover:border-line-strong hover:text-fg"
           >
             {example}
           </button>
         ))}
-        <button
-          type="button"
-          onClick={() => setShowKey((value) => !value)}
-          className="ml-auto inline-flex items-center gap-1.5 text-xs text-muted transition hover:text-fg"
-        >
-          <KeyRound className="h-3.5 w-3.5" />
-          {showKey ? t.scanner.hideKey : t.scanner.haveKey}
-        </button>
+        <span className="ml-auto flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setShowOptions((value) => !value)}
+            aria-expanded={showOptions}
+            className={cn('inline-flex items-center gap-1.5 text-xs transition hover:text-fg', showOptions ? 'text-fg' : 'text-muted')}
+          >
+            <SlidersHorizontal className="h-3.5 w-3.5" />
+            {t.scanner.options.toggle}
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowKey((value) => !value)}
+            aria-expanded={showKey}
+            className={cn('inline-flex items-center gap-1.5 text-xs transition hover:text-fg', showKey ? 'text-fg' : 'text-muted')}
+          >
+            <KeyRound className="h-3.5 w-3.5" />
+            {showKey ? t.scanner.hideKey : t.scanner.haveKey}
+          </button>
+        </span>
       </div>
 
-      <AnimatePresence initial={false}>
-        {showKey && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            className="overflow-hidden"
-          >
-            <div className="pt-3">
-              <input
-                type="text"
-                value={license}
-                onChange={(event) => {
-                  setLicense(event.target.value);
-                  storeLicense(event.target.value.trim());
-                }}
-                placeholder={t.scanner.keyPlaceholder}
-                spellCheck={false}
-                aria-label={t.scanner.haveKey}
-                className="input font-mono text-xs"
-              />
-              <p className="mt-1.5 flex items-center gap-1.5 text-xs">
-                {keyState.kind === 'idle' && <span className="text-faint">{t.scanner.keyHint}</span>}
-                {keyState.kind === 'checking' && (
-                  <span className="inline-flex items-center gap-1.5 text-faint">
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                    {t.scanner.keyChecking}
-                  </span>
-                )}
-                {keyState.kind === 'valid' && (
-                  <span className="inline-flex items-center gap-1.5 text-pass">
-                    <CircleCheck className="h-3.5 w-3.5" />
-                    {t.scanner.keyValid(keyState.plan.charAt(0).toUpperCase() + keyState.plan.slice(1))}
-                  </span>
-                )}
-                {(keyState.kind === 'invalid' || keyState.kind === 'inactive') && (
-                  <span className="inline-flex items-center gap-1.5 text-fail">
-                    <CircleAlert className="h-3.5 w-3.5" />
-                    {keyState.kind === 'invalid' ? t.scanner.keyInvalid : t.scanner.keyInactive}
-                  </span>
-                )}
-              </p>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <Collapse open={showOptions}>
+        <ScanOptionsPanel plan={plan} />
+      </Collapse>
+
+      <Collapse open={showKey}>
+        <input
+          type="text"
+          value={license}
+          onChange={(event) => {
+            setLicense(event.target.value);
+            storeLicense(event.target.value.trim());
+          }}
+          placeholder={t.scanner.keyPlaceholder}
+          spellCheck={false}
+          aria-label={t.scanner.haveKey}
+          className="input font-mono text-xs"
+        />
+        <p className="mt-1.5 flex items-center gap-1.5 text-xs" aria-live="polite">
+          {keyState.kind === 'idle' && <span className="text-faint">{t.scanner.keyHint}</span>}
+          {keyState.kind === 'checking' && (
+            <span className="inline-flex items-center gap-1.5 text-faint">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              {t.scanner.keyChecking}
+            </span>
+          )}
+          {keyState.kind === 'valid' && (
+            <span className="inline-flex items-center gap-1.5 text-pass">
+              <CircleCheck className="h-3.5 w-3.5" />
+              {t.scanner.keyValid(keyState.plan === 'agency' ? 'Agency' : 'Pro')}
+            </span>
+          )}
+          {(keyState.kind === 'invalid' || keyState.kind === 'inactive') && (
+            <span className="inline-flex items-center gap-1.5 text-fail">
+              <CircleAlert className="h-3.5 w-3.5" />
+              {keyState.kind === 'invalid' ? t.scanner.keyInvalid : t.scanner.keyInactive}
+            </span>
+          )}
+        </p>
+      </Collapse>
     </div>
   );
 }

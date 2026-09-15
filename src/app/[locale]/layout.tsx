@@ -3,10 +3,12 @@ import { JetBrains_Mono, Onest } from 'next/font/google';
 import { notFound } from 'next/navigation';
 import { Footer } from '@/components/footer';
 import { Navbar } from '@/components/navbar';
-import { Providers } from '@/components/providers';
+import { Providers, type SiteFeatures } from '@/components/providers';
 import { siteConfig } from '@/config/site';
 import { isLocale, LOCALE_TAGS, LOCALES } from '@/i18n/config';
 import { getDictionary } from '@/i18n/ui';
+import { freeDailyLimit } from '@/lib/access';
+import { publicPaymentConfig } from '@/lib/payments';
 import { PLANS, siteUrl } from '@/lib/plans';
 
 const sans = Onest({ subsets: ['latin', 'cyrillic'], variable: '--font-sans', display: 'swap' });
@@ -62,6 +64,11 @@ export default async function LocaleLayout({
   const { locale } = await params;
   if (!isLocale(locale)) notFound();
   const t = getDictionary(locale);
+  const features: SiteFeatures = {
+    payments: publicPaymentConfig(),
+    freeDailyLimit: freeDailyLimit(),
+    priceKzt: { ...siteConfig.priceKzt },
+  };
 
   // The product's own structured data — the site passes its own audit.
   const jsonLd = {
@@ -90,7 +97,7 @@ export default async function LocaleLayout({
         </noscript>
       </head>
       <body>
-        <Providers locale={locale}>
+        <Providers locale={locale} features={features}>
           <div className="relative flex min-h-screen flex-col overflow-x-clip">
             <Navbar />
             <main className="flex-1">{children}</main>

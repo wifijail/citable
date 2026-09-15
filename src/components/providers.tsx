@@ -5,10 +5,20 @@ import { ThemeProvider } from 'next-themes';
 import { createContext, useContext, useMemo } from 'react';
 import type { Locale } from '@/i18n/config';
 import { getDictionary, type Dictionary } from '@/i18n/ui';
+import type { PublicPaymentConfig } from '@/lib/payments';
+import type { PaidPlanId } from '@/lib/plans';
+
+/** Server-side configuration the browser needs. Only public, serialisable values. */
+export interface SiteFeatures {
+  payments: PublicPaymentConfig;
+  freeDailyLimit: number;
+  priceKzt: Record<PaidPlanId, number | null>;
+}
 
 interface I18nValue {
   locale: Locale;
   t: Dictionary;
+  features: SiteFeatures;
 }
 
 const I18nContext = createContext<I18nValue | null>(null);
@@ -18,8 +28,16 @@ const I18nContext = createContext<I18nValue | null>(null);
  * boundary as props. Client components therefore receive only the locale string
  * and look the dictionary up locally.
  */
-export function Providers({ locale, children }: { locale: Locale; children: React.ReactNode }) {
-  const value = useMemo(() => ({ locale, t: getDictionary(locale) }), [locale]);
+export function Providers({
+  locale,
+  features,
+  children,
+}: {
+  locale: Locale;
+  features: SiteFeatures;
+  children: React.ReactNode;
+}) {
+  const value = useMemo(() => ({ locale, t: getDictionary(locale), features }), [locale, features]);
 
   return (
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>

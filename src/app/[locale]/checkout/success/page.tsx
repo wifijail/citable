@@ -12,7 +12,7 @@ type Props = {
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { locale } = await params;
   if (!isLocale(locale)) return {};
-  return { title: getDictionary(locale).checkout.readyTitle, robots: { index: false, follow: false } };
+  return { title: getDictionary(locale).checkout.reviewTitle, robots: { index: false, follow: false } };
 }
 
 export default async function CheckoutSuccessPage({ params, searchParams }: Props) {

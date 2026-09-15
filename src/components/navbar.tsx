@@ -30,6 +30,7 @@ export function Navbar() {
   const links = [
     { href: `/${locale}#features`, label: t.nav.product },
     { href: `/${locale}/pricing`, label: t.nav.pricing },
+    { href: `/${locale}/methodology`, label: t.nav.methodology },
     { href: `/${locale}/docs`, label: t.nav.docs },
     { href: `/${locale}/contact`, label: t.nav.contact },
   ];

@@ -6,7 +6,9 @@ import { siteUrl } from '@/lib/plans';
 const PAGES: Array<{ path: string; priority: number; changeFrequency: 'weekly' | 'monthly' | 'yearly' }> = [
   { path: '', priority: 1, changeFrequency: 'weekly' },
   { path: '/pricing', priority: 0.9, changeFrequency: 'monthly' },
-  { path: '/docs', priority: 0.7, changeFrequency: 'monthly' },
+  { path: '/methodology', priority: 0.7, changeFrequency: 'monthly' },
+  { path: '/docs', priority: 0.6, changeFrequency: 'monthly' },
+  { path: '/about', priority: 0.4, changeFrequency: 'yearly' },
   { path: '/contact', priority: 0.5, changeFrequency: 'yearly' },
   ...LEGAL_SLUGS.map((slug) => ({ path: `/legal/${slug}`, priority: 0.2, changeFrequency: 'yearly' as const })),
 ];

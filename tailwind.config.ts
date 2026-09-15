@@ -35,34 +35,21 @@ const config: Config = {
       borderRadius: { xl: '0.875rem', '2xl': '1.125rem', '3xl': '1.5rem' },
       boxShadow: {
         card: '0 1px 0 0 rgb(var(--fg) / 0.03), 0 8px 24px -12px rgb(var(--fg) / 0.12)',
-        glow: '0 0 0 1px rgb(var(--accent) / 0.35), 0 12px 40px -8px rgb(var(--accent) / 0.45)',
       },
       keyframes: {
-        marquee: { from: { transform: 'translateX(0)' }, to: { transform: 'translateX(-50%)' } },
         'spin-slow': { to: { transform: 'rotate(360deg)' } },
-        aurora: {
-          '0%, 100%': { transform: 'translate3d(0,0,0) scale(1)' },
-          '33%': { transform: 'translate3d(6%,-4%,0) scale(1.08)' },
-          '66%': { transform: 'translate3d(-5%,5%,0) scale(0.96)' },
-        },
-        shimmer: { from: { backgroundPosition: '200% 0' }, to: { backgroundPosition: '-200% 0' } },
         'cube-spin': {
           from: { transform: 'rotateX(-24deg) rotateY(0deg)' },
           to: { transform: 'rotateX(-24deg) rotateY(360deg)' },
         },
-        float: { '0%, 100%': { transform: 'translateY(0)' }, '50%': { transform: 'translateY(-8px)' } },
         'fade-up': {
-          from: { opacity: '0', transform: 'translateY(14px)', filter: 'blur(6px)' },
-          to: { opacity: '1', transform: 'none', filter: 'none' },
+          from: { opacity: '0', transform: 'translateY(10px)' },
+          to: { opacity: '1', transform: 'none' },
         },
       },
       animation: {
-        marquee: 'marquee 40s linear infinite',
         'spin-slow': 'spin-slow 8s linear infinite',
-        aurora: 'aurora 22s ease-in-out infinite',
-        shimmer: 'shimmer 2.4s linear infinite',
         'cube-spin': 'cube-spin 9s linear infinite',
-        float: 'float 6s ease-in-out infinite',
         // CSS-only entrance: runs before (and without) JavaScript, unlike motion's initial state.
         'fade-up': 'fade-up 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) both',
       },

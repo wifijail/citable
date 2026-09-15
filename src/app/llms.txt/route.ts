@@ -1,5 +1,6 @@
 import { siteConfig } from '@/config/site';
 import { AI_CRAWLERS } from '@/lib/audit/crawlers';
+import { CHECK_COUNT } from '@/lib/audit/registry';
 import { PLANS, siteUrl } from '@/lib/plans';
 
 export const dynamic = 'force-static';
@@ -18,27 +19,37 @@ export function GET(): Response {
 
   const body = `# ${siteConfig.name}
 
-> ${siteConfig.name} audits whether AI assistants (ChatGPT, Claude, Perplexity, Google AI Overviews)
-> can reach, read, index and cite a given web page, and returns the exact fixes for what
-> is blocking them. Free scan, no signup.
+> ${siteConfig.name} checks whether AI assistants and AI search (ChatGPT, Claude, Perplexity, Google and others)
+> are allowed to fetch a web page or a sample of a site, can read it without JavaScript, and find clear
+> structured information in it. It reports the problems it finds with a fix for each. The score is the
+> service's own heuristic and does not guarantee citations.
 
 ## Core pages
-- [Scanner and overview](${base}/en): run a free AI-visibility audit on any URL
-- [API documentation](${base}/en/docs): POST /api/v1/scan, CI deploy gates, scoring model
+- [Scanner](${base}/en): check a page or a whole site
+- [Methodology](${base}/en/methodology): all ${CHECK_COUNT} checks, scoring and sources
+- [API documentation](${base}/en/docs): POST /api/v1/scan, options, CI usage
 - [Pricing](${base}/en/pricing): Free, Pro (${price('pro')}), Agency (${price('agency')}), Lifetime (${price('lifetime')})
-- [Contact](${base}/en/contact): sales and support
+- [About](${base}/en/about): operator details and third-party licences
+- [Contact](${base}/en/contact)
 
 ## What the audit covers
-- AI crawler access: robots.txt evaluated against ${AI_CRAWLERS.length} AI agents, separating live-retrieval
-  agents (ChatGPT-User, Claude-User, Perplexity-User) from training crawlers (GPTBot, CCBot)
-- Machine readability: server-rendered content, client-side-rendering risk, llms.txt, sitemap
-- Structured data: JSON-LD entities, authorship, datePublished/dateModified, FAQPage markup
-- Answerability: heading structure, question-shaped headings, lists and tables, paragraph density
-- Metadata and identity: title, description, canonical, Open Graph, declared language
-- Technical health: HTTP status, HTTPS, response time, redirect chain, payload size, image alt text
+- AI crawler access: robots.txt evaluated for ${AI_CRAWLERS.length} AI agents, separating agents that fetch pages
+  for a user's question (ChatGPT-User, Claude-User, Perplexity-User) from indexers and training crawlers
+- Machine readability: server-rendered content, client-side rendering, llms.txt, sitemap
+- Structured data: JSON-LD, authorship, dates, type-specific markup (Product, SoftwareApplication, Article, LocalBusiness)
+- Answerability: headings, lists and tables, paragraph density, topic focus
+- Identity: title, description, canonical, Open Graph, language, trust pages
+- Technical: HTTP status, HTTPS, response time, redirects, page weight, image alt text, CDN bot protection
+- Site mode: sampled pages compared for duplicates, missing descriptions, blocked or noindexed pages
+
+## Legal
+- [Terms of Service](${base}/en/legal/terms)
+- [Privacy Policy](${base}/en/legal/privacy)
+- [Refund Policy](${base}/en/legal/refund)
 
 ## Other languages
 - [Русский](${base}/ru)
+- [Қазақша](${base}/kk)
 - [Español](${base}/es)
 - [Deutsch](${base}/de)
 `;

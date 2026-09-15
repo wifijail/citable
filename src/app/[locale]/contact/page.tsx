@@ -1,4 +1,4 @@
-import { Clock, Globe, Mail, Send } from 'lucide-react';
+import { Clock, Globe, Mail, Phone, Send } from 'lucide-react';
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { ContactForm } from '@/components/contact-form';
@@ -25,6 +25,7 @@ export default async function ContactPage({ params }: Props) {
 
   const channels = [
     contact.email && { Icon: Mail, label: t.contact.emailLabel, value: contact.email, href: `mailto:${contact.email}` },
+    contact.phone && { Icon: Phone, label: t.contact.phoneLabel, value: contact.phone, href: `tel:${contact.phone.replace(/[^\d+]/g, '')}` },
     telegram && { Icon: Send, label: t.contact.telegramLabel, value: `@${telegram}`, href: `https://t.me/${telegram}` },
     contact.social && {
       Icon: Globe,
@@ -55,12 +56,12 @@ export default async function ContactPage({ params }: Props) {
                   <li key={label}>
                     <a
                       href={href}
-                      target={href.startsWith('mailto:') ? undefined : '_blank'}
+                      target={/^(mailto|tel):/.test(href) ? undefined : '_blank'}
                       rel="noopener noreferrer"
-                      className="flex items-center gap-3 rounded-xl border border-line p-3 transition hover:border-accent"
+                      className="flex items-center gap-3 rounded-xl border border-line p-3 transition hover:border-line-strong"
                     >
-                      <span className="grid h-9 w-9 place-items-center rounded-lg bg-accent/10">
-                        <Icon className="h-4 w-4 text-accent" />
+                      <span className="grid h-9 w-9 place-items-center rounded-lg bg-surface-2">
+                        <Icon className="h-4 w-4 text-muted" />
                       </span>
                       <span className="min-w-0">
                         <span className="block text-xs text-faint">{label}</span>
