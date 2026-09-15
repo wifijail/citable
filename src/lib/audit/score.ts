@@ -118,7 +118,9 @@ export function applyPlanGating(report: AuditReport): AuditReport {
     ...report,
     categories,
     priorityFixes,
-    truncated: lockedIds.size > 0,
+    // The corrected robots.txt stays free; the llms.txt and JSON-LD drafts are paid.
+    generated: { robotsTxt: report.generated.robotsTxt, llmsTxt: null, jsonLd: null },
+    truncated: lockedIds.size > 0 || report.generated.llmsTxt !== null || report.generated.jsonLd !== null,
     lockedCount: lockedIds.size,
   };
 }

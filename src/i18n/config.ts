@@ -1,4 +1,4 @@
-export const LOCALES = ['en', 'ru', 'es', 'de'] as const;
+export const LOCALES = ['en', 'ru', 'kk', 'es', 'de'] as const;
 export type Locale = (typeof LOCALES)[number];
 
 export const DEFAULT_LOCALE: Locale = 'en';
@@ -8,6 +8,7 @@ export const LOCALE_COOKIE = 'NEXT_LOCALE';
 export const LOCALE_LABELS: Record<Locale, string> = {
   en: 'English',
   ru: 'Русский',
+  kk: 'Қазақша',
   es: 'Español',
   de: 'Deutsch',
 };
@@ -16,6 +17,7 @@ export const LOCALE_LABELS: Record<Locale, string> = {
 export const LOCALE_TAGS: Record<Locale, string> = {
   en: 'en-US',
   ru: 'ru-RU',
+  kk: 'kk-KZ',
   es: 'es-ES',
   de: 'de-DE',
 };

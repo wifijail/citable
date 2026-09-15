@@ -1,12 +1,18 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import type { AuditMessages } from '@/i18n/audit/en';
+import { CITABLE_BOT_TOKEN } from './crawlers';
+import { isAllowed, parseRobots } from './robots';
 import type { FetchedResource, PageSnapshot } from './types';
 
-const USER_AGENT =
-  'CitableBot/1.0 (+https://github.com/wifijail/citable; AI visibility auditor; respects robots.txt)';
+/**
+ * Honest identification: this is an on-demand audit requested by a person, and
+ * site owners can opt out with `User-agent: CitableBot` in robots.txt.
+ */
+export const USER_AGENT = `Mozilla/5.0 (compatible; ${CITABLE_BOT_TOKEN}/2.0; on-demand AI-visibility audit; +https://github.com/wifijail/citable)`;
 
 const MAX_BODY_BYTES = 3_000_000; // 3 MB is far beyond any sane HTML document.
+const MAX_REDIRECTS = 5;
 
 export function fetchTimeoutMs(): number {
   const parsed = Number.parseInt(process.env.FETCH_TIMEOUT_MS ?? '', 10);
@@ -21,7 +27,8 @@ export type TargetErrorCode =
   | 'fullDomain'
   | 'privateIp'
   | 'unresolvable'
-  | 'resolvesPrivate';
+  | 'resolvesPrivate'
+  | 'botDisallowed';
 
 /** Thrown for user-input problems. Carries a code so the API can localise it. */
 export class InvalidTargetError extends Error {
@@ -52,6 +59,8 @@ export function describeTargetError(error: InvalidTargetError, t: AuditMessages)
       return t.errors.unresolvable(error.detail);
     case 'resolvesPrivate':
       return t.errors.resolvesPrivate;
+    case 'botDisallowed':
+      return t.errors.botDisallowed;
   }
 }
 
@@ -84,7 +93,7 @@ export function isPrivateAddress(address: string): boolean {
 
 /**
  * Normalises user input into a safe, absolute http(s) URL and refuses anything
- * that points back into private infrastructure (SSRF guard).
+ * that points into private infrastructure (SSRF guard).
  */
 export async function assertPublicUrl(input: string): Promise<URL> {
   const trimmed = input.trim();
@@ -102,9 +111,10 @@ export async function assertPublicUrl(input: string): Promise<URL> {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new InvalidTargetError('protocol');
   }
+  if (url.username || url.password) throw new InvalidTargetError('invalid', input.slice(0, 120));
 
   const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.internal')) {
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.internal') || host.endsWith('.local')) {
     throw new InvalidTargetError('privateHost');
   }
   if (!host.includes('.') && isIP(host) === 0) {
@@ -130,107 +140,126 @@ export async function assertPublicUrl(input: string): Promise<URL> {
   return url;
 }
 
-/** Single HTTP GET that never throws — failures come back as `ok: false`. */
-export async function fetchResource(url: string, accept: string): Promise<FetchedResource> {
+export type Fetcher = (url: string, accept: string, timeoutMs?: number) => Promise<FetchedResource>;
+
+/**
+ * HTTP GET that never throws — failures come back as `ok: false`.
+ * Redirects are followed by hand so every hop passes the SSRF guard: a public
+ * page must not be able to bounce the scanner onto an internal address.
+ */
+export const fetchResource: Fetcher = async (url, accept, timeoutMs = fetchTimeoutMs()) => {
   const startedAt = Date.now();
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), fetchTimeoutMs());
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let current = url;
+  let redirects = 0;
+
+  const failure = (error: string, status = 0): FetchedResource => ({
+    url: current,
+    ok: false,
+    status,
+    headers: {},
+    body: '',
+    elapsedMs: Date.now() - startedAt,
+    redirects,
+    error,
+  });
 
   try {
-    const response = await fetch(url, {
-      redirect: 'follow',
-      signal: controller.signal,
-      headers: { 'user-agent': USER_AGENT, accept },
-      cache: 'no-store',
-    });
+    for (;;) {
+      if (redirects > 0) {
+        try {
+          await assertPublicUrl(current);
+        } catch {
+          return failure('blocked-redirect');
+        }
+      }
 
-    const headers: Record<string, string> = {};
-    response.headers.forEach((value, key) => {
-      headers[key.toLowerCase()] = value;
-    });
+      const response = await fetch(current, {
+        redirect: 'manual',
+        signal: controller.signal,
+        headers: { 'user-agent': USER_AGENT, accept },
+        cache: 'no-store',
+      });
 
-    const buffer = await response.arrayBuffer();
-    const body = new TextDecoder('utf-8', { fatal: false }).decode(
-      buffer.byteLength > MAX_BODY_BYTES ? buffer.slice(0, MAX_BODY_BYTES) : buffer,
-    );
+      const location = response.headers.get('location');
+      if (response.status >= 300 && response.status < 400 && location) {
+        if (redirects >= MAX_REDIRECTS) return failure('too-many-redirects', response.status);
+        current = new URL(location, current).toString();
+        redirects++;
+        continue;
+      }
 
-    return {
-      url: response.url || url,
-      ok: response.ok,
-      status: response.status,
-      headers,
-      body,
-      elapsedMs: Date.now() - startedAt,
-    };
+      const headers: Record<string, string> = {};
+      response.headers.forEach((value, key) => {
+        headers[key.toLowerCase()] = value;
+      });
+
+      const buffer = await response.arrayBuffer();
+      const body = new TextDecoder('utf-8', { fatal: false }).decode(
+        buffer.byteLength > MAX_BODY_BYTES ? buffer.slice(0, MAX_BODY_BYTES) : buffer,
+      );
+
+      return {
+        url: current,
+        ok: response.ok,
+        status: response.status,
+        headers,
+        body,
+        elapsedMs: Date.now() - startedAt,
+        redirects,
+      };
+    }
   } catch (error) {
-    const message =
+    return failure(
       error instanceof Error && error.name === 'AbortError'
         ? 'timeout'
         : error instanceof Error
           ? error.message
-          : 'network error';
-    return {
-      url,
-      ok: false,
-      status: 0,
-      headers: {},
-      body: '',
-      elapsedMs: Date.now() - startedAt,
-      error: message,
-    };
+          : 'network error',
+    );
   } finally {
     clearTimeout(timer);
   }
-}
+};
 
-/** Follows redirects manually just to count them — cheap signal, no body needed. */
-async function countRedirects(url: string): Promise<number> {
-  let hops = 0;
-  let current = url;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), fetchTimeoutMs());
-
-  try {
-    while (hops < 6) {
-      const response = await fetch(current, {
-        method: 'HEAD',
-        redirect: 'manual',
-        signal: controller.signal,
-        headers: { 'user-agent': USER_AGENT },
-        cache: 'no-store',
-      });
-      const location = response.headers.get('location');
-      if (response.status < 300 || response.status >= 400 || !location) break;
-      current = new URL(location, current).toString();
-      hops++;
-    }
-  } catch {
-    // Redirect counting is a nice-to-have; never fail the audit over it.
-  } finally {
-    clearTimeout(timer);
-  }
-  return hops;
+/** True when robots.txt contains a group naming CitableBot that disallows the path. */
+export function citableBotDisallowed(robotsBody: string, path: string): boolean {
+  const parsed = parseRobots(robotsBody);
+  const namesUs = parsed.groups.some((group) => group.agents.includes(CITABLE_BOT_TOKEN.toLowerCase()));
+  // Only an explicit opt-out counts: auditing wildcard blocks is the point of the tool.
+  return namesUs && !isAllowed(parsed, CITABLE_BOT_TOKEN, path).allowed;
 }
 
 /**
- * Collects everything the checks need in one pass: the page, robots.txt,
- * llms.txt and the sitemap are fetched concurrently.
+ * Collects everything the checks need in one pass: robots.txt first (to honour
+ * an explicit CitableBot opt-out), then the page, llms.txt and the sitemap.
  */
-export async function fetchTarget(rawUrl: string): Promise<PageSnapshot> {
+export async function fetchTarget(rawUrl: string, fetcher: Fetcher = fetchResource): Promise<PageSnapshot> {
   const url = await assertPublicUrl(rawUrl);
   const origin = url.origin;
 
-  const [page, robots, llmsTxt, redirectChainLength] = await Promise.all([
-    fetchResource(url.toString(), 'text/html,application/xhtml+xml'),
-    fetchResource(`${origin}/robots.txt`, 'text/plain'),
-    fetchResource(`${origin}/llms.txt`, 'text/plain'),
-    countRedirects(url.toString()),
+  const robots = await fetcher(`${origin}/robots.txt`, 'text/plain');
+  if (robots.ok && citableBotDisallowed(robots.body, url.pathname || '/')) {
+    throw new InvalidTargetError('botDisallowed');
+  }
+
+  const [page, llmsTxt] = await Promise.all([
+    fetcher(url.toString(), 'text/html,application/xhtml+xml'),
+    fetcher(`${origin}/llms.txt`, 'text/plain'),
   ]);
 
-  // Prefer the sitemap robots.txt declares; fall back to the conventional path.
-  const declaredSitemap = /^\s*sitemap\s*:\s*(\S+)/im.exec(robots.ok ? robots.body : '')?.[1];
-  const sitemapUrl = declaredSitemap ?? `${origin}/sitemap.xml`;
-  const sitemap = await fetchResource(sitemapUrl, 'application/xml,text/xml');
+  // Prefer the sitemap robots.txt declares, if it is on the same site; else the conventional path.
+  const declared = /^\s*sitemap\s*:\s*(\S+)/im.exec(robots.ok ? robots.body : '')?.[1];
+  let sitemapUrl = `${origin}/sitemap.xml`;
+  if (declared) {
+    try {
+      if (new URL(declared, origin).hostname === url.hostname) sitemapUrl = new URL(declared, origin).toString();
+    } catch {
+      // Ignore a malformed Sitemap line.
+    }
+  }
+  const sitemap = await fetcher(sitemapUrl, 'application/xml,text/xml');
 
   return {
     requestedUrl: url.toString(),
@@ -240,6 +269,6 @@ export async function fetchTarget(rawUrl: string): Promise<PageSnapshot> {
     robots: robots.status > 0 ? robots : null,
     llmsTxt,
     sitemap,
-    redirectChainLength,
+    redirectChainLength: page.redirects,
   };
 }

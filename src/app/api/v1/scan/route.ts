@@ -3,18 +3,21 @@ import { z } from 'zod';
 import { getAuditMessages } from '@/i18n/audit';
 import { resolveAccess } from '@/lib/access';
 import { describeTargetError, InvalidTargetError, runAudit } from '@/lib/audit';
+import { resolveOptions, ScanOptionsSchema } from '@/lib/audit/options';
 import { readJson, requestLocale } from '@/lib/http';
 import { consumeQuota } from '@/lib/ratelimit';
 
 export const runtime = 'nodejs';
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 const BodySchema = z.object({
   url: z.string().min(1).max(2048),
   /** Optional CI gate: respond 422 when the score drops below this threshold. */
   minScore: z.number().min(0).max(100).optional(),
-  /** Language of the findings: en, ru, es or de. */
+  /** Language of the findings: en, ru, kk, es or de. */
   lang: z.string().max(5).optional(),
+  /** mode (page|site), maxPages, siteType, engines, blockTraining. */
+  options: ScanOptionsSchema,
 });
 
 function bearer(request: Request): string | null {
@@ -57,7 +60,7 @@ export async function POST(request: Request): Promise<Response> {
 
   const locale = requestLocale(request, body.data.lang ?? 'en');
   try {
-    const report = await runAudit(body.data.url, access.plan, locale);
+    const report = await runAudit(body.data.url, access.plan, locale, resolveOptions(body.data.options, access.plan));
     const minScore = body.data.minScore;
     const failsGate = minScore !== undefined && report.score < minScore;
 

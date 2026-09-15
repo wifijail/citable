@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { analyseSnapshot, applyPlanGating } from '@/lib/audit';
 import { auditEn } from '@/i18n/audit/en';
 import { LOCALES } from '@/i18n/config';
+import { findCheck } from '@/lib/audit/registry';
 import { gradeFor, scoreChecks } from '@/lib/audit/score';
 import type { CheckResult, FetchedResource, PageSnapshot } from '@/lib/audit/types';
 
@@ -13,6 +14,7 @@ function resource(body: string, overrides: Partial<FetchedResource> = {}): Fetch
     headers: { 'content-type': 'text/html' },
     body,
     elapsedMs: 120,
+    redirects: 0,
     ...overrides,
   };
 }
@@ -253,7 +255,9 @@ describe('localisation of findings', () => {
     const checks = report.categories.flatMap((category) => category.checks);
 
     expect(report.locale).toBe(locale);
-    expect(checks).toHaveLength(31);
+    // Page checks plus the checks for the detected site profile, all from the registry.
+    expect(checks.length).toBeGreaterThanOrEqual(31);
+    expect(checks.every((check) => findCheck(check.id))).toBe(true);
     expect(report.verdict.length).toBeGreaterThan(10);
     for (const check of checks) {
       expect(check.title.trim()).not.toBe('');

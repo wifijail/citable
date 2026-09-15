@@ -3,16 +3,18 @@ import { z } from 'zod';
 import { getAuditMessages } from '@/i18n/audit';
 import { checkFreeQuota, clientIp, hashIp, resolveAccess } from '@/lib/access';
 import { applyPlanGating, describeTargetError, InvalidTargetError, runAudit } from '@/lib/audit';
+import { resolveOptions, ScanOptionsSchema } from '@/lib/audit/options';
 import { getStore } from '@/lib/db';
 import { randomId, readJson, requestLocale } from '@/lib/http';
 
 export const runtime = 'nodejs';
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 const BodySchema = z.object({
   url: z.string().min(1).max(2048),
   license: z.string().max(200).optional(),
   locale: z.string().max(5).optional(),
+  options: ScanOptionsSchema,
 });
 
 /**
@@ -37,7 +39,7 @@ export async function POST(request: Request): Promise<Response> {
 
   let report;
   try {
-    report = await runAudit(body.data.url, access.plan, locale);
+    report = await runAudit(body.data.url, access.plan, locale, resolveOptions(body.data.options, access.plan));
   } catch (error) {
     if (error instanceof InvalidTargetError) {
       return NextResponse.json({ error: 'invalid_target', message: describeTargetError(error, t) }, { status: 400 });

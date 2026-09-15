@@ -1,15 +1,12 @@
 /**
- * A robots.txt parser with the matching semantics real crawlers use
- * (Google's Robots Exclusion Protocol / RFC 9309):
+ * A robots.txt parser with the matching semantics of RFC 9309:
  *
  *  - consecutive `User-agent` lines form one group sharing the rules below them;
- *  - a crawler obeys the group whose agent token is the *longest* case-insensitive
- *    prefix of its product token, falling back to the `*` group;
- *  - within a group the *longest matching path pattern* wins, `Allow` breaking ties;
+ *  - a crawler obeys the groups whose agent token is the *longest* case-insensitive
+ *    prefix of its product token, falling back to the `*` groups; several groups
+ *    naming the same agent are combined into one;
+ *  - the *longest matching path pattern* wins, `Allow` breaking ties;
  *  - `*` matches any run of characters and `$` anchors the end of the path.
- *
- * This is the piece most naive "AI SEO" checkers get wrong — they grep for the bot
- * name and miss the wildcard group that is actually blocking it.
  */
 
 export type RuleType = 'allow' | 'disallow';
@@ -18,19 +15,21 @@ export interface RobotsRule {
   type: RuleType;
   /** Raw pattern as written in the file. */
   pattern: string;
-  /** Original line, for evidence in the report. */
+  /** Normalised line, for evidence in the report and for regenerating the file. */
   raw: string;
 }
 
 export interface RobotsGroup {
   agents: string[];
   rules: RobotsRule[];
+  /** Non-access lines kept verbatim (Crawl-delay, Host, Clean-param). */
+  extras: string[];
 }
 
 export interface ParsedRobots {
   groups: RobotsGroup[];
   sitemaps: string[];
-  /** Lines we could not interpret — surfaced as a warning in the report. */
+  /** Lines we could not interpret. */
   unknownDirectives: string[];
   isEmpty: boolean;
 }
@@ -39,7 +38,7 @@ export interface RobotsDecision {
   allowed: boolean;
   /** The deciding line, or null when nothing matched (default allow). */
   rule: string | null;
-  /** Which `User-agent` group decided it. */
+  /** Which `User-agent` token decided it. */
   matchedGroup: string | null;
 }
 
@@ -73,7 +72,7 @@ export function parseRobots(input: string): ParsedRobots {
     switch (directive) {
       case 'user-agent': {
         if (!current || !acceptingAgents) {
-          current = { agents: [], rules: [] };
+          current = { agents: [], rules: [], extras: [] };
           groups.push(current);
           acceptingAgents = true;
         }
@@ -84,11 +83,12 @@ export function parseRobots(input: string): ParsedRobots {
       case 'disallow': {
         if (!current) {
           // Rules before any User-agent line: treat as a wildcard group.
-          current = { agents: ['*'], rules: [] };
+          current = { agents: ['*'], rules: [], extras: [] };
           groups.push(current);
         }
         acceptingAgents = false;
-        current.rules.push({ type: directive, pattern: value, raw: line });
+        const type: RuleType = directive;
+        current.rules.push({ type, pattern: value, raw: `${type === 'allow' ? 'Allow' : 'Disallow'}: ${value}` });
         break;
       }
       case 'sitemap': {
@@ -97,49 +97,44 @@ export function parseRobots(input: string): ParsedRobots {
       }
       case 'crawl-delay':
       case 'host':
-      case 'noindex':
-      case 'clean-param':
-        // Known but irrelevant to access decisions.
+      case 'clean-param': {
+        if (current) {
+          acceptingAgents = false;
+          current.extras.push(line);
+        }
         break;
+      }
       default:
         unknownDirectives.push(line);
     }
   }
 
-  return {
-    groups,
-    sitemaps,
-    unknownDirectives,
-    isEmpty: meaningfulLines === 0,
-  };
+  return { groups, sitemaps, unknownDirectives, isEmpty: meaningfulLines === 0 };
 }
 
-/** Selects the group a crawler must obey, mirroring longest-token-match. */
-function selectGroup(parsed: ParsedRobots, agent: string): { group: RobotsGroup; token: string } | null {
+/**
+ * The token a crawler obeys (longest matching product-token prefix, else `*`)
+ * together with the rules of every group naming that token.
+ */
+export function selectRules(
+  parsed: ParsedRobots,
+  agent: string,
+): { token: string; rules: RobotsRule[] } | null {
   const needle = agent.toLowerCase();
-  let best: { group: RobotsGroup; token: string } | null = null;
+  let token: string | null = null;
 
   for (const group of parsed.groups) {
-    for (const token of group.agents) {
-      if (token === '*') {
-        if (!best) best = { group, token };
-        continue;
-      }
-      if (!needle.startsWith(token)) continue;
-      if (!best || best.token === '*' || token.length > best.token.length) {
-        best = { group, token };
-      }
+    for (const candidate of group.agents) {
+      if (candidate === '*' || !needle.startsWith(candidate)) continue;
+      if (!token || candidate.length > token.length) token = candidate;
     }
   }
+  if (!token && parsed.groups.some((group) => group.agents.includes('*'))) token = '*';
+  if (!token) return null;
 
-  // A wildcard group only applies when no specific group matched.
-  if (best && best.token === '*') {
-    const specific = parsed.groups.some((g) =>
-      g.agents.some((t) => t !== '*' && needle.startsWith(t)),
-    );
-    if (specific) return null;
-  }
-  return best;
+  const chosen = token;
+  const rules = parsed.groups.filter((group) => group.agents.includes(chosen)).flatMap((group) => group.rules);
+  return { token: chosen, rules };
 }
 
 /** Translates a robots pattern (`*`, `$`) into an anchored RegExp. */
@@ -158,35 +153,31 @@ function patternToRegExp(pattern: string): RegExp {
   return new RegExp('^' + source);
 }
 
-/** Effective length used for specificity, ignoring the wildcard/anchor glyphs. */
+/** Effective length used for specificity, ignoring the end anchor. */
 function specificity(pattern: string): number {
   return pattern.replace(/\$$/, '').length;
 }
 
-export function isAllowed(parsed: ParsedRobots, agent: string, path: string): RobotsDecision {
-  if (parsed.isEmpty) {
-    return { allowed: true, rule: null, matchedGroup: null };
-  }
+/** Whether a single rule pattern matches a path. */
+export function ruleMatches(rule: RobotsRule, path: string): boolean {
+  if (rule.pattern === '') return false;
+  return patternToRegExp(rule.pattern).test(path.startsWith('/') ? path : `/${path}`);
+}
 
-  const selected = selectGroup(parsed, agent);
-  if (!selected) {
-    return { allowed: true, rule: null, matchedGroup: null };
-  }
+export function isAllowed(parsed: ParsedRobots, agent: string, path: string): RobotsDecision {
+  if (parsed.isEmpty) return { allowed: true, rule: null, matchedGroup: null };
+
+  const selected = selectRules(parsed, agent);
+  if (!selected) return { allowed: true, rule: null, matchedGroup: null };
 
   const target = path.startsWith('/') ? path : `/${path}`;
   let winner: RobotsRule | null = null;
 
-  for (const rule of selected.group.rules) {
-    // `Disallow:` with an empty value explicitly allows everything.
-    if (rule.pattern === '') {
-      if (rule.type === 'disallow' && !winner) {
-        winner = { type: 'allow', pattern: '', raw: rule.raw };
-      }
-      continue;
-    }
-    if (!patternToRegExp(rule.pattern).test(target)) continue;
+  for (const rule of selected.rules) {
+    // An empty `Disallow:` blocks nothing; an empty `Allow:` allows nothing extra.
+    if (rule.pattern === '' || !ruleMatches(rule, target)) continue;
 
-    if (!winner || winner.pattern === '') {
+    if (!winner) {
       winner = rule;
       continue;
     }
@@ -199,7 +190,7 @@ export function isAllowed(parsed: ParsedRobots, agent: string, path: string): Ro
 
   return {
     allowed: winner ? winner.type === 'allow' : true,
-    rule: winner && winner.pattern !== '' ? winner.raw : null,
+    rule: winner ? winner.raw : null,
     matchedGroup: selected.token,
   };
 }

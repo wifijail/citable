@@ -1,23 +1,26 @@
 import { AI_CRAWLERS } from '../crawlers';
 import { isAllowed, parseRobots } from '../robots';
-import type { CheckContext, CheckResult, CrawlerVerdict, PageSnapshot } from '../types';
+import type { CheckContext, CheckResult, CrawlerVerdict, PageSnapshot, ScanOptions } from '../types';
 
-/** Runs every registered AI agent through the site's robots.txt. */
-export function evaluateCrawlers(snapshot: PageSnapshot): CrawlerVerdict[] {
+/** Runs every registered AI agent through the site's robots.txt for one path. */
+export function evaluateCrawlers(snapshot: PageSnapshot, options: ScanOptions, path?: string): CrawlerVerdict[] {
   const robotsBody = snapshot.robots?.ok ? snapshot.robots.body : '';
   const parsed = parseRobots(robotsBody);
-  const path = new URL(snapshot.finalUrl).pathname || '/';
+  const target = path ?? (new URL(snapshot.finalUrl).pathname || '/');
 
   return AI_CRAWLERS.map((crawler) => {
-    const decision = isAllowed(parsed, crawler.name, path);
+    const decision = isAllowed(parsed, crawler.name, target);
     return {
       id: crawler.id,
       name: crawler.name,
       vendor: crawler.vendor,
+      engine: crawler.engine,
       purpose: crawler.purpose,
       allowed: decision.allowed,
+      selected: options.engines.includes(crawler.engine),
       rule: decision.rule,
       matchedGroup: decision.matchedGroup,
+      docs: crawler.docs,
     };
   });
 }
@@ -34,10 +37,10 @@ function blockedRatio(verdicts: CrawlerVerdict[]): number {
 }
 
 export function crawlerAccessChecks(ctx: CheckContext): CheckResult[] {
-  const { snapshot, $, t } = ctx;
+  const { snapshot, $, t, options } = ctx;
   const m = t.checks;
   const results: CheckResult[] = [];
-  const verdicts = evaluateCrawlers(snapshot);
+  const verdicts = evaluateCrawlers(snapshot, options);
 
   // --- robots.txt exists and parses -----------------------------------------
   const robots = snapshot.robots;
@@ -60,8 +63,8 @@ export function crawlerAccessChecks(ctx: CheckContext): CheckResult[] {
     fix: robotsOk ? undefined : m.robotsPresent.fix(snapshot.origin),
   });
 
-  // --- Retrieval bots: the ones that decide whether you can be cited live ----
-  const retrieval = verdicts.filter((v) => v.purpose === 'retrieval');
+  // --- Agents fetching pages for a user's question ---------------------------
+  const retrieval = verdicts.filter((v) => v.purpose === 'retrieval' && v.selected);
   const retrievalBlocked = retrieval.filter((v) => !v.allowed);
   const retrievalRatio = blockedRatio(retrieval);
 
@@ -69,29 +72,26 @@ export function crawlerAccessChecks(ctx: CheckContext): CheckResult[] {
     id: 'retrieval-bots-allowed',
     title: m.retrievalBots.title,
     category: 'crawler-access',
-    status: retrievalBlocked.length === 0 ? 'pass' : retrievalRatio > 0.4 ? 'fail' : 'warn',
-    score: 1 - retrievalRatio,
-    weight: 12,
+    status: retrieval.length === 0 ? 'info' : retrievalBlocked.length === 0 ? 'pass' : retrievalRatio > 0.4 ? 'fail' : 'warn',
+    score: retrieval.length === 0 ? 1 : 1 - retrievalRatio,
+    weight: retrieval.length === 0 ? 0 : 12,
     impact: 'critical',
     summary:
-      retrievalBlocked.length === 0
-        ? m.retrievalBots.ok(retrieval.length)
-        : m.retrievalBots.blocked(
-            retrievalBlocked.length,
-            retrieval.length,
-            retrievalBlocked.map((v) => v.name).join(', '),
-          ),
-    evidence: retrievalBlocked.map((v) =>
-      m.retrievalBots.evidence(v.name, v.rule ?? '', v.matchedGroup ?? '*'),
-    ),
-    fix:
-      retrievalBlocked.length === 0
-        ? undefined
-        : m.retrievalBots.fix(retrievalBlocked.map((v) => v.name)),
+      retrieval.length === 0
+        ? m.retrievalBots.noneSelected
+        : retrievalBlocked.length === 0
+          ? m.retrievalBots.ok(retrieval.length)
+          : m.retrievalBots.blocked(
+              retrievalBlocked.length,
+              retrieval.length,
+              retrievalBlocked.map((v) => v.name).join(', '),
+            ),
+    evidence: retrievalBlocked.map((v) => m.retrievalBots.evidence(v.name, v.rule ?? '', v.matchedGroup ?? '*')),
+    fix: retrievalBlocked.length === 0 ? undefined : m.retrievalBots.fix(retrievalBlocked.map((v) => v.name)),
   });
 
-  // --- Indexing bots ---------------------------------------------------------
-  const indexing = verdicts.filter((v) => v.purpose === 'indexing');
+  // --- Search indexers ---------------------------------------------------------
+  const indexing = verdicts.filter((v) => v.purpose === 'indexing' && v.selected);
   const indexingBlocked = indexing.filter((v) => !v.allowed);
   const indexingRatio = blockedRatio(indexing);
 
@@ -99,37 +99,56 @@ export function crawlerAccessChecks(ctx: CheckContext): CheckResult[] {
     id: 'indexing-bots-allowed',
     title: m.indexingBots.title,
     category: 'crawler-access',
-    status: indexingBlocked.length === 0 ? 'pass' : indexingRatio > 0.4 ? 'fail' : 'warn',
-    score: 1 - indexingRatio,
-    weight: 10,
+    status: indexing.length === 0 ? 'info' : indexingBlocked.length === 0 ? 'pass' : indexingRatio > 0.4 ? 'fail' : 'warn',
+    score: indexing.length === 0 ? 1 : 1 - indexingRatio,
+    weight: indexing.length === 0 ? 0 : 10,
     impact: 'critical',
     summary:
-      indexingBlocked.length === 0
-        ? m.indexingBots.ok(indexing.length)
-        : m.indexingBots.blocked(indexingBlocked.map((v) => v.name).join(', ')),
+      indexing.length === 0
+        ? m.indexingBots.noneSelected
+        : indexingBlocked.length === 0
+          ? m.indexingBots.ok(indexing.length)
+          : m.indexingBots.blocked(indexingBlocked.map((v) => v.name).join(', ')),
     evidence: indexingBlocked.map((v) => m.indexingBots.evidence(v.name, v.rule ?? '')),
-    fix:
-      indexingBlocked.length === 0 ? undefined : m.indexingBots.fix(indexingBlocked.map((v) => v.name)),
+    fix: indexingBlocked.length === 0 ? undefined : m.indexingBots.fix(indexingBlocked.map((v) => v.name)),
   });
 
-  // --- Training bots: informational, blocking them is a valid choice ---------
+  // --- Training crawlers, judged against the owner's own policy ---------------
   const training = verdicts.filter((v) => v.purpose === 'training');
   const trainingBlocked = training.filter((v) => !v.allowed);
+  const trainingAllowed = training.filter((v) => v.allowed);
+
+  let trainingResult: Pick<CheckResult, 'status' | 'score' | 'summary' | 'fix'>;
+  if (options.blockTraining) {
+    trainingResult =
+      trainingAllowed.length === 0
+        ? { status: 'pass', score: 1, summary: m.trainingBots.respected }
+        : {
+            status: 'warn',
+            score: 0.5,
+            summary: m.trainingBots.notBlocked(trainingAllowed.map((v) => v.name).join(', ')),
+            fix: m.trainingBots.fixBlock(trainingAllowed.map((v) => v.name)),
+          };
+  } else {
+    trainingResult =
+      trainingBlocked.length === 0
+        ? { status: 'pass', score: 1, summary: m.trainingBots.ok }
+        : {
+            status: 'info',
+            score: 0.8,
+            summary: m.trainingBots.blocked(trainingBlocked.length, trainingBlocked.map((v) => v.name).join(', ')),
+            fix: m.trainingBots.fix,
+          };
+  }
 
   results.push({
     id: 'training-bots-policy',
     title: m.trainingBots.title,
     category: 'crawler-access',
-    status: trainingBlocked.length === 0 ? 'pass' : 'info',
-    score: trainingBlocked.length === 0 ? 1 : 0.7,
     weight: 3,
     impact: 'low',
-    summary:
-      trainingBlocked.length === 0
-        ? m.trainingBots.ok
-        : m.trainingBots.blocked(trainingBlocked.length, trainingBlocked.map((v) => v.name).join(', ')),
     evidence: training.map((v) => m.trainingBots.state(v.name, v.allowed)),
-    fix: trainingBlocked.length === 0 ? undefined : m.trainingBots.fix,
+    ...trainingResult,
   });
 
   // --- Page-level opt-out signals -------------------------------------------
