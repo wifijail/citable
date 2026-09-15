@@ -3,10 +3,12 @@ import type { AuditReport } from '@/lib/audit/types';
 import type { Locale } from '@/i18n/config';
 import type { PaidPlanId } from '@/lib/plans';
 import { SCHEMA_STATEMENTS } from './schema';
+import { RETENTION } from './types';
 import type {
   AdminStats,
   CheckoutRecord,
   ContactRecord,
+  ErasureResult,
   LeadRecord,
   LicenseRecord,
   LicenseStatus,
@@ -15,8 +17,12 @@ import type {
   NewContact,
   NewLead,
   NewLicense,
+  NewPaymentRequest,
   NewScan,
   PaymentProvider,
+  PaymentRequestRecord,
+  PaymentRequestStatus,
+  PurgeResult,
   ScanRecord,
   Store,
 } from './types';
@@ -143,19 +149,23 @@ export class PostgresStore implements Store {
   async saveLead(lead: NewLead): Promise<void> {
     const sql = await this.ready();
     await sql`
-      insert into leads (email, source, scanned_url, score, locale)
-      values (${lead.email}, ${lead.source}, ${lead.scannedUrl}, ${lead.score}, ${lead.locale})
+      insert into leads (email, source, scanned_url, score, locale, consent_at, consent_version)
+      values (${lead.email}, ${lead.source}, ${lead.scannedUrl}, ${lead.score}, ${lead.locale},
+              ${lead.consentAt}, ${lead.consentVersion})
       on conflict (email, source) do update
         set scanned_url = coalesce(excluded.scanned_url, leads.scanned_url),
-            score = coalesce(excluded.score, leads.score)
+            score = coalesce(excluded.score, leads.score),
+            consent_at = excluded.consent_at,
+            consent_version = excluded.consent_version
     `;
   }
 
   async saveContact(contact: NewContact): Promise<void> {
     const sql = await this.ready();
     await sql`
-      insert into contact_messages (name, email, topic, message, locale)
-      values (${contact.name}, ${contact.email}, ${contact.topic}, ${contact.message}, ${contact.locale})
+      insert into contact_messages (name, email, topic, message, locale, consent_at, consent_version)
+      values (${contact.name}, ${contact.email}, ${contact.topic}, ${contact.message}, ${contact.locale},
+              ${contact.consentAt}, ${contact.consentVersion})
     `;
   }
 
@@ -182,6 +192,53 @@ export class PostgresStore implements Store {
       email: str(row.email),
       createdAt: iso(row.created_at),
     };
+  }
+
+  async createPaymentRequest(request: NewPaymentRequest): Promise<PaymentRequestRecord> {
+    const sql = await this.ready();
+    const rows = await sql<Row[]>`
+      insert into payment_requests (claim_token, product, email, reference, message, locale, consent_at, consent_version)
+      values (${request.claimToken}, ${request.product}, ${request.email}, ${request.reference},
+              ${request.message}, ${request.locale}, ${request.consentAt}, ${request.consentVersion})
+      returning *
+    `;
+    if (!rows[0]) throw new Error('Payment request insert returned no row');
+    return toPaymentRequest(rows[0]);
+  }
+
+  async getPaymentRequestByClaim(claimToken: string): Promise<PaymentRequestRecord | null> {
+    const sql = await this.ready();
+    const rows = await sql<Row[]>`select * from payment_requests where claim_token = ${claimToken} limit 1`;
+    return rows[0] ? toPaymentRequest(rows[0]) : null;
+  }
+
+  async getPaymentRequest(id: number): Promise<PaymentRequestRecord | null> {
+    const sql = await this.ready();
+    const rows = await sql<Row[]>`select * from payment_requests where id = ${id} limit 1`;
+    return rows[0] ? toPaymentRequest(rows[0]) : null;
+  }
+
+  async listPaymentRequests(limit: number): Promise<PaymentRequestRecord[]> {
+    const sql = await this.ready();
+    const rows = await sql<Row[]>`
+      select * from payment_requests
+      order by (status = 'pending') desc, created_at desc
+      limit ${limit}
+    `;
+    return rows.map(toPaymentRequest);
+  }
+
+  async decidePaymentRequest(
+    id: number,
+    status: Exclude<PaymentRequestStatus, 'pending'>,
+    licenseId: number | null,
+  ): Promise<boolean> {
+    const sql = await this.ready();
+    const result = await sql`
+      update payment_requests set status = ${status}, license_id = ${licenseId}, decided_at = now()
+      where id = ${id} and status = 'pending'
+    `;
+    return result.count > 0;
   }
 
   async upsertLicense(license: NewLicense): Promise<{ license: LicenseRecord; inserted: boolean }> {
@@ -245,6 +302,18 @@ export class PostgresStore implements Store {
     return result.count > 0;
   }
 
+  async extendLicense(id: number, days: number): Promise<boolean> {
+    const sql = await this.ready();
+    const result = await sql`
+      update licenses
+      set period_end = greatest(now(), coalesce(period_end, now())) + ${days}::int * interval '1 day',
+          status = 'active',
+          updated_at = now()
+      where id = ${id}
+    `;
+    return result.count > 0;
+  }
+
   async stats(): Promise<AdminStats> {
     const sql = await this.ready();
     const [scans] = await sql<{ total: string; day: string }[]>`
@@ -255,6 +324,9 @@ export class PostgresStore implements Store {
     const [leads] = await sql<{ total: string }[]>`select count(*)::text as total from leads`;
     const [contacts] = await sql<{ total: string }[]>`
       select count(*)::text as total from contact_messages
+    `;
+    const [pending] = await sql<{ total: string }[]>`
+      select count(*)::text as total from payment_requests where status = 'pending'
     `;
     const active = await sql<{ product: string; total: string }[]>`
       select product, count(*)::text as total from licenses
@@ -273,6 +345,7 @@ export class PostgresStore implements Store {
       scans24h: Number(scans?.day ?? 0),
       leadsTotal: Number(leads?.total ?? 0),
       contactsTotal: Number(contacts?.total ?? 0),
+      pendingPayments: Number(pending?.total ?? 0),
       licensesActive: byProduct.pro + byProduct.agency + byProduct.lifetime,
       activeByProduct: byProduct,
     };
@@ -288,6 +361,8 @@ export class PostgresStore implements Store {
       scannedUrl: str(row.scanned_url),
       score: row.score === null ? null : Number(row.score),
       locale: String(row.locale),
+      consentAt: isoOrNull(row.consent_at) ?? '',
+      consentVersion: str(row.consent_version) ?? '',
       createdAt: iso(row.created_at),
     }));
   }
@@ -299,11 +374,13 @@ export class PostgresStore implements Store {
     `;
     return rows.map((row) => ({
       id: Number(row.id),
-      name: String(row.name),
+      name: str(row.name),
       email: String(row.email),
       topic: String(row.topic),
       message: String(row.message),
       locale: String(row.locale),
+      consentAt: isoOrNull(row.consent_at) ?? '',
+      consentVersion: str(row.consent_version) ?? '',
       createdAt: iso(row.created_at),
     }));
   }
@@ -331,4 +408,70 @@ export class PostgresStore implements Store {
       createdAt: iso(row.created_at),
     }));
   }
+
+  async purgeExpired(now = new Date()): Promise<PurgeResult> {
+    const sql = await this.ready();
+    const hoursAgo = (hours: number) => new Date(now.getTime() - hours * 60 * 60 * 1000);
+    const daysAgo = (days: number) => hoursAgo(days * 24);
+
+    const scansDeleted = await sql`delete from scans where created_at < ${daysAgo(RETENTION.scanDays)}`;
+    const ipHashesCleared = await sql`
+      update scans set ip_hash = null
+      where ip_hash is not null and created_at < ${hoursAgo(RETENTION.ipHashHours)}
+    `;
+    const checkoutsDeleted = await sql`
+      delete from checkouts c
+      where c.created_at < ${daysAgo(RETENTION.checkoutDays)}
+        and not exists (select 1 from licenses l where l.claim_token = c.claim_token)
+    `;
+    const requestsDeleted = await sql`
+      delete from payment_requests
+      where status = 'rejected' and coalesce(decided_at, created_at) < ${daysAgo(RETENTION.rejectedRequestDays)}
+    `;
+    const leadsDeleted = await sql`delete from leads where created_at < ${daysAgo(RETENTION.leadDays)}`;
+    const contactsDeleted = await sql`delete from contact_messages where created_at < ${daysAgo(RETENTION.contactDays)}`;
+
+    return {
+      ipHashesCleared: ipHashesCleared.count,
+      scansDeleted: scansDeleted.count,
+      checkoutsDeleted: checkoutsDeleted.count,
+      requestsDeleted: requestsDeleted.count,
+      leadsDeleted: leadsDeleted.count,
+      contactsDeleted: contactsDeleted.count,
+    };
+  }
+
+  async eraseByEmail(email: string): Promise<ErasureResult> {
+    const sql = await this.ready();
+    const target = email.trim().toLowerCase();
+    const leads = await sql`delete from leads where lower(email) = ${target}`;
+    const contacts = await sql`delete from contact_messages where lower(email) = ${target}`;
+    const requests = await sql`delete from payment_requests where lower(email) = ${target}`;
+    const licenses = await sql`update licenses set email = null, updated_at = now() where lower(email) = ${target}`;
+    await sql`update checkouts set email = null where lower(email) = ${target}`;
+    return {
+      leads: leads.count,
+      contacts: contacts.count,
+      requests: requests.count,
+      licensesAnonymised: licenses.count,
+    };
+  }
+}
+
+function toPaymentRequest(row: Row): PaymentRequestRecord {
+  return {
+    id: Number(row.id),
+    claimToken: String(row.claim_token),
+    product: String(row.product) as PaidPlanId,
+    email: String(row.email),
+    reference: String(row.reference),
+    message: str(row.message),
+    locale: String(row.locale) as Locale,
+    status: String(row.status) as PaymentRequestStatus,
+    licenseId: row.license_id === null || row.license_id === undefined ? null : Number(row.license_id),
+    consentAt: iso(row.consent_at),
+    consentVersion: String(row.consent_version),
+    createdAt: iso(row.created_at),
+    decidedAt: isoOrNull(row.decided_at),
+  };
 }

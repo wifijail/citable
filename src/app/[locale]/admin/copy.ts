@@ -19,7 +19,7 @@ const en = {
   setupItems: {
     database: 'Database (DATABASE_URL)',
     databaseMemory: 'No database — data is kept in memory and lost on restart',
-    payments: 'Payments (Lemon Squeezy or Stripe)',
+    payments: 'Payments (Gumroad, payment links, Lemon Squeezy or Stripe)',
     licensing: 'License signing (LICENSE_SECRET)',
     email: 'Email delivery (RESEND_API_KEY + EMAIL_FROM)',
     legal: 'Legal identity & contact email (NEXT_PUBLIC_LEGAL_* / NEXT_PUBLIC_CONTACT_EMAIL)',
@@ -31,10 +31,11 @@ const en = {
     contacts: 'Messages',
     active: 'Active licenses',
     mrr: 'Estimated MRR',
+    pending: 'Payments to confirm',
   },
   issue: {
     title: 'Issue a license manually',
-    hint: 'For payments received outside the checkout (bank transfer, invoice) or giveaways. The key is emailed if email is configured.',
+    hint: 'For payments received outside the site or for giveaways. The key is emailed if email is configured. With an end date the key stops working after it unless you extend it.',
     email: 'Customer email',
     product: 'Plan',
     days: 'Valid for, days (0 = no expiry)',
@@ -50,6 +51,16 @@ const en = {
     exportCsv: 'Export CSV',
     empty: 'Nothing yet.',
     revoke: 'Revoke',
+    extend: '+31 days',
+    payments: 'Payments to confirm',
+    paymentsHint: 'Check the payment in your platform dashboard (Boosty, Patreon…) before approving. Approving issues the key and shows it on the buyer’s status page.',
+    reference: 'Paid as',
+    approve: 'Approve and issue key',
+    reject: 'Reject',
+    decided: 'Decision',
+    erase: 'Delete a person’s data',
+    eraseHint: 'For deletion requests (Privacy Policy). Removes leads, messages and payment requests with this email and removes the email from licenses.',
+    eraseSubmit: 'Delete data',
     date: 'Date',
     email: 'Email',
     plan: 'Plan',
@@ -84,7 +95,7 @@ const ru: typeof en = {
   setupItems: {
     database: 'База данных (DATABASE_URL)',
     databaseMemory: 'Базы нет — данные хранятся в памяти и пропадают при перезапуске',
-    payments: 'Оплата (Lemon Squeezy или Stripe)',
+    payments: 'Оплата (Gumroad, ссылки на оплату, Lemon Squeezy или Stripe)',
     licensing: 'Подпись ключей (LICENSE_SECRET)',
     email: 'Отправка писем (RESEND_API_KEY + EMAIL_FROM)',
     legal: 'Юр. данные и контактная почта (NEXT_PUBLIC_LEGAL_* / NEXT_PUBLIC_CONTACT_EMAIL)',
@@ -96,10 +107,11 @@ const ru: typeof en = {
     contacts: 'Сообщения',
     active: 'Активные лицензии',
     mrr: 'Примерный MRR',
+    pending: 'Оплаты на проверке',
   },
   issue: {
     title: 'Выдать лицензию вручную',
-    hint: 'Для оплат мимо checkout (перевод, счёт) или подарков. Если почта настроена, ключ уйдёт клиенту письмом.',
+    hint: 'Для оплат мимо сайта или подарков. Если почта настроена, ключ уйдёт клиенту письмом. Со сроком действия ключ перестанет работать после даты, если его не продлить.',
     email: 'Почта клиента',
     product: 'Тариф',
     days: 'Срок действия, дней (0 = бессрочно)',
@@ -115,6 +127,16 @@ const ru: typeof en = {
     exportCsv: 'Скачать CSV',
     empty: 'Пока пусто.',
     revoke: 'Отозвать',
+    extend: '+31 день',
+    payments: 'Оплаты на проверке',
+    paymentsHint: 'Перед подтверждением найдите платёж в кабинете платформы (Boosty, Patreon…). Подтверждение выдаёт ключ и показывает его покупателю на странице статуса.',
+    reference: 'Оплатил как',
+    approve: 'Подтвердить и выдать ключ',
+    reject: 'Отклонить',
+    decided: 'Решение',
+    erase: 'Удалить данные человека',
+    eraseHint: 'Для запросов на удаление (Политика конфиденциальности). Удаляет заявки, сообщения и заявки на оплату с этой почтой и стирает почту из лицензий.',
+    eraseSubmit: 'Удалить данные',
     date: 'Дата',
     email: 'Почта',
     plan: 'Тариф',
@@ -134,5 +156,6 @@ const ru: typeof en = {
 export type AdminCopy = typeof en;
 
 export function getAdminCopy(locale: Locale): AdminCopy {
-  return locale === 'ru' ? ru : en;
+  // The owner-only panel is in Russian for ru and kk visitors, English otherwise.
+  return locale === 'ru' || locale === 'kk' ? ru : en;
 }

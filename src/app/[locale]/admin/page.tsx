@@ -1,17 +1,17 @@
 import { CircleCheck, CircleX, Download, LogOut, TriangleAlert } from 'lucide-react';
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
-import { legalIdentityComplete } from '@/config/site';
+import { missingOwnerDetails } from '@/config/site';
 import { isLocale, LOCALE_TAGS } from '@/i18n/config';
 import { adminPassword, isAdmin } from '@/lib/admin-auth';
 import { getStore, licenseHasAccess } from '@/lib/db';
 import { emailConfigured } from '@/lib/email';
 import { licenseSecret } from '@/lib/license';
-import { activeProvider } from '@/lib/payments';
+import { paymentMode } from '@/lib/payments';
 import { findPlan } from '@/lib/plans';
-import { logoutAction, revokeLicenseAction } from './actions';
+import { approvePaymentAction, extendLicenseAction, logoutAction, rejectPaymentAction, revokeLicenseAction } from './actions';
 import { getAdminCopy } from './copy';
-import { IssueLicenseForm, LoginForm } from './forms';
+import { EraseDataForm, IssueLicenseForm, LoginForm } from './forms';
 
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Admin', robots: { index: false, follow: false } };
@@ -75,12 +75,15 @@ export default async function AdminPage({ params }: Props) {
   }
 
   const store = getStore();
-  const [stats, licenses, leads, contacts, scans] = await Promise.all([
+  // Applying retention here too means it happens even if the daily cron is not set up.
+  await store.purgeExpired().catch((error) => console.error('[admin] purge failed', error));
+  const [stats, licenses, leads, contacts, scans, requests] = await Promise.all([
     store.stats(),
     store.listLicenses(50),
     store.listLeads(50),
     store.listContacts(50),
     store.listScans(30),
+    store.listPaymentRequests(50),
   ]);
 
   const format = (iso: string | null) =>
@@ -91,10 +94,13 @@ export default async function AdminPage({ params }: Props) {
 
   const checklist = [
     { label: store.kind === 'postgres' ? copy.setupItems.database : copy.setupItems.databaseMemory, ok: store.kind === 'postgres' },
-    { label: `${copy.setupItems.payments}${activeProvider() ? ` — ${activeProvider()}` : ''}`, ok: Boolean(activeProvider()) },
+    { label: `${copy.setupItems.payments}${paymentMode() ? ` — ${paymentMode()}` : ''}`, ok: Boolean(paymentMode()) },
     { label: copy.setupItems.licensing, ok: Boolean(licenseSecret()) },
     { label: copy.setupItems.email, ok: emailConfigured() },
-    { label: copy.setupItems.legal, ok: legalIdentityComplete() },
+    {
+      label: missingOwnerDetails().length ? `${copy.setupItems.legal}: ${missingOwnerDetails().join(', ')}` : copy.setupItems.legal,
+      ok: missingOwnerDetails().length === 0,
+    },
   ];
 
   return (
@@ -126,12 +132,13 @@ export default async function AdminPage({ params }: Props) {
         </ul>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
         {[
           [copy.stats.scans24h, stats.scans24h],
           [copy.stats.scansTotal, stats.scansTotal],
           [copy.stats.leads, stats.leadsTotal],
           [copy.stats.contacts, stats.contactsTotal],
+          [copy.stats.pending, stats.pendingPayments],
           [copy.stats.active, stats.licensesActive],
           [copy.stats.mrr, `$${mrr}`],
         ].map(([label, value]) => (
@@ -140,6 +147,46 @@ export default async function AdminPage({ params }: Props) {
             <p className="mt-1 text-2xl font-semibold tabular-nums">{value}</p>
           </div>
         ))}
+      </div>
+
+      <div id="payments" className="card overflow-hidden">
+        <div className="border-b border-line px-4 py-3">
+          <h2 className="font-semibold">{copy.tables.payments}</h2>
+          <p className="mt-1 text-xs text-muted">{copy.tables.paymentsHint}</p>
+        </div>
+        <Table
+          empty={copy.tables.empty}
+          headers={[copy.tables.date, copy.tables.email, copy.tables.plan, copy.tables.reference, copy.tables.message, copy.tables.decided]}
+          rows={requests.map((request) => [
+            format(request.createdAt),
+            request.email,
+            request.product,
+            <span key="reference" className="break-all">{request.reference}</span>,
+            <p key="message" className="max-w-xs whitespace-pre-wrap text-muted">{request.message ?? '—'}</p>,
+            request.status === 'pending' ? (
+              <div key="decide" className="flex flex-wrap gap-2">
+                <form action={approvePaymentAction}>
+                  <input type="hidden" name="locale" value={locale} />
+                  <input type="hidden" name="id" value={request.id} />
+                  <button type="submit" className="text-xs font-medium text-pass hover:underline">
+                    {copy.tables.approve}
+                  </button>
+                </form>
+                <form action={rejectPaymentAction}>
+                  <input type="hidden" name="locale" value={locale} />
+                  <input type="hidden" name="id" value={request.id} />
+                  <button type="submit" className="text-xs text-fail hover:underline">
+                    {copy.tables.reject}
+                  </button>
+                </form>
+              </div>
+            ) : (
+              <span key="status" className={request.status === 'approved' ? 'text-pass' : 'text-fail'}>
+                {request.status} · {format(request.decidedAt)}
+              </span>
+            ),
+          ])}
+        />
       </div>
 
       <IssueLicenseForm locale={locale} copy={copy} />
@@ -161,15 +208,26 @@ export default async function AdminPage({ params }: Props) {
             <code key="key" className="font-mono text-xs">
               {license.licenseKey.slice(0, 18)}…
             </code>,
-            licenseHasAccess(license) ? (
-              <form key="revoke" action={revokeLicenseAction}>
-                <input type="hidden" name="locale" value={locale} />
-                <input type="hidden" name="id" value={license.id} />
-                <button type="submit" className="text-xs text-fail hover:underline">
-                  {copy.tables.revoke}
-                </button>
-              </form>
-            ) : null,
+            <div key="actions" className="flex flex-wrap gap-2">
+              {license.provider === 'manual' && license.product !== 'lifetime' && (
+                <form action={extendLicenseAction}>
+                  <input type="hidden" name="locale" value={locale} />
+                  <input type="hidden" name="id" value={license.id} />
+                  <button type="submit" className="whitespace-nowrap text-xs text-accent hover:underline">
+                    {copy.tables.extend}
+                  </button>
+                </form>
+              )}
+              {licenseHasAccess(license) && license.provider !== 'gumroad' && (
+                <form action={revokeLicenseAction}>
+                  <input type="hidden" name="locale" value={locale} />
+                  <input type="hidden" name="id" value={license.id} />
+                  <button type="submit" className="text-xs text-fail hover:underline">
+                    {copy.tables.revoke}
+                  </button>
+                </form>
+              )}
+            </div>,
           ])}
         />
       </div>
@@ -198,7 +256,7 @@ export default async function AdminPage({ params }: Props) {
             rows={contacts.map((contact) => [
               format(contact.createdAt),
               <a key="mail" href={`mailto:${contact.email}`} className="text-accent hover:underline">
-                {contact.name}
+                {contact.name ?? contact.email}
               </a>,
               contact.topic,
               <p key="message" className="max-w-xs whitespace-pre-wrap text-muted">
@@ -224,6 +282,8 @@ export default async function AdminPage({ params }: Props) {
           ])}
         />
       </div>
+
+      <EraseDataForm locale={locale} copy={copy} />
     </section>
   );
 }

@@ -1,6 +1,7 @@
 import { createHmac } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { activeProvider } from '@/lib/payments';
+import { activeProvider, paymentMode, publicPaymentConfig } from '@/lib/payments';
+import { isGumroadKey, purchaseStatus, verifyGumroadKey } from '@/lib/payments/gumroad';
 import {
   lemonSubscriptionState,
   productForLemonVariant,
@@ -93,6 +94,7 @@ describe('provider selection', () => {
   });
 
   it('prefers Lemon Squeezy when both are fully configured, unless forced', () => {
+    vi.stubEnv('LICENSE_SECRET', 'x'.repeat(32));
     vi.stubEnv('LEMONSQUEEZY_API_KEY', 'k');
     vi.stubEnv('LEMONSQUEEZY_STORE_ID', '1');
     vi.stubEnv('LEMONSQUEEZY_WEBHOOK_SECRET', 's');
@@ -108,6 +110,95 @@ describe('provider selection', () => {
     vi.stubEnv('STRIPE_WEBHOOK_SECRET', '');
     vi.stubEnv('LEMONSQUEEZY_API_KEY', '');
     expect(activeProvider()).toBeNull();
+  });
+});
+
+describe('external payment modes', () => {
+  const clearHosted = () => {
+    for (const name of ['LEMONSQUEEZY_API_KEY', 'STRIPE_SECRET_KEY', 'PAYMENT_PROVIDER']) vi.stubEnv(name, '');
+  };
+
+  it('uses Gumroad when a product id and page are set, without needing LICENSE_SECRET', () => {
+    clearHosted();
+    vi.stubEnv('LICENSE_SECRET', '');
+    vi.stubEnv('GUMROAD_PRODUCT_ID_PRO', 'prod_pro');
+    vi.stubEnv('GUMROAD_URL_PRO', 'https://seller.gumroad.com/l/pro');
+    expect(paymentMode()).toBe('gumroad');
+    const config = publicPaymentConfig();
+    expect(config.platformName).toBe('Gumroad');
+    expect(config.links.pro).toBe('https://seller.gumroad.com/l/pro');
+    expect(config.links.agency).toBeNull();
+  });
+
+  it('uses payment links only when keys can be issued, and ignores non-https links', () => {
+    clearHosted();
+    vi.stubEnv('GUMROAD_PRODUCT_ID_PRO', '');
+    vi.stubEnv('PAYMENT_LINK_PRO', 'https://boosty.to/someone');
+    vi.stubEnv('PAYMENT_PLATFORM_NAME', 'Boosty');
+    vi.stubEnv('LICENSE_SECRET', '');
+    expect(paymentMode()).toBeNull();
+    vi.stubEnv('LICENSE_SECRET', 'x'.repeat(32));
+    expect(paymentMode()).toBe('external');
+    expect(publicPaymentConfig().platformName).toBe('Boosty');
+    vi.stubEnv('PAYMENT_LINK_PRO', 'javascript:alert(1)');
+    expect(paymentMode()).toBeNull();
+  });
+});
+
+describe('Gumroad license verification', () => {
+  const KEY = 'A1B2C3D4-E5F6A7B8-C9D0E1F2-A3B4C5D6';
+  const reply = (status: number, body: unknown) =>
+    Promise.resolve(new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } }));
+
+  it('recognises the Gumroad key format only', () => {
+    expect(isGumroadKey(KEY)).toBe(true);
+    expect(isGumroadKey('CITE-PRO-0123456789ABCDEF0123-0123456789ABCDEF01234567')).toBe(false);
+  });
+
+  it('maps refunds, disputes and memberships to license status', () => {
+    expect(purchaseStatus({})).toBe('active');
+    expect(purchaseStatus({ refunded: true })).toBe('expired');
+    expect(purchaseStatus({ disputed: true })).toBe('expired');
+    expect(purchaseStatus({ disputed: true, dispute_won: true })).toBe('active');
+    expect(purchaseStatus({ subscription_failed_at: '2026-09-01T00:00:00Z' })).toBe('past_due');
+    expect(purchaseStatus({ subscription_ended_at: '2026-09-01T00:00:00Z' })).toBe('expired');
+  });
+
+  it('finds the product a key belongs to', async () => {
+    vi.stubEnv('GUMROAD_PRODUCT_ID_PRO', 'prod_pro');
+    vi.stubEnv('GUMROAD_PRODUCT_ID_AGENCY', 'prod_agency');
+    vi.stubEnv('GUMROAD_PRODUCT_ID_LIFETIME', '');
+    const calls: string[] = [];
+    const fetchMock = ((_url: string, init?: RequestInit) => {
+      const params = init?.body as URLSearchParams;
+      calls.push(params.get('product_id') ?? '');
+      expect(params.get('increment_uses_count')).toBe('false');
+      return params.get('product_id') === 'prod_agency'
+        ? reply(200, { success: true, purchase: { product_id: 'prod_agency', sale_id: 'sale_1', license_key: KEY } })
+        : reply(404, { success: false, message: 'That license does not exist for the provided product.' });
+    }) as typeof fetch;
+
+    const verdict = await verifyGumroadKey(KEY, fetchMock);
+    expect(calls).toEqual(['prod_pro', 'prod_agency']);
+    expect(verdict).toEqual({ kind: 'ok', product: 'agency', status: 'active', saleId: 'sale_1', subscriptionId: null });
+  });
+
+  it('distinguishes an unknown key from Gumroad being down', async () => {
+    vi.stubEnv('GUMROAD_PRODUCT_ID_PRO', 'prod_pro');
+    vi.stubEnv('GUMROAD_PRODUCT_ID_AGENCY', '');
+    vi.stubEnv('GUMROAD_PRODUCT_ID_LIFETIME', '');
+    const unknown = (() => reply(404, { success: false })) as typeof fetch;
+    const down = (() => Promise.reject(new Error('ECONNRESET'))) as typeof fetch;
+    expect(await verifyGumroadKey(KEY, unknown)).toEqual({ kind: 'invalid' });
+    expect(await verifyGumroadKey(KEY, down)).toEqual({ kind: 'unreachable' });
+  });
+
+  it('rejects an answer about a different product', async () => {
+    vi.stubEnv('GUMROAD_PRODUCT_ID_PRO', 'prod_pro');
+    vi.stubEnv('GUMROAD_PRODUCT_ID_AGENCY', '');
+    vi.stubEnv('GUMROAD_PRODUCT_ID_LIFETIME', '');
+    const wrong = (() => reply(200, { success: true, purchase: { product_id: 'someone_else', license_key: KEY } })) as typeof fetch;
+    expect(await verifyGumroadKey(KEY, wrong)).toEqual({ kind: 'invalid' });
   });
 });
 

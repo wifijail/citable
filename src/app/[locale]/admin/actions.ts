@@ -13,6 +13,7 @@ import {
   SESSION_MAX_AGE,
 } from '@/lib/admin-auth';
 import { getStore } from '@/lib/db';
+import { sendRejectionEmail } from '@/lib/email';
 import { grantLicense } from '@/lib/fulfillment';
 import { randomId } from '@/lib/http';
 import { licenseSecret } from '@/lib/license';
@@ -87,8 +88,9 @@ export async function issueLicenseAction(_previous: ActionState, formData: FormD
     email,
     customerRef: null,
     subscriptionRef: null,
-    // A cancelled status with an end date expires on its own, no renewal needed.
-    status: periodEnd ? 'cancelled' : 'active',
+    // Active with an end date: access stops after it (plus a short grace period)
+    // unless the license is extended from the licenses table.
+    status: 'active',
     periodEnd,
     claimToken: null,
     fallbackRef: randomId(16),
@@ -97,6 +99,78 @@ export async function issueLicenseAction(_previous: ActionState, formData: FormD
   });
 
   return { ok: true, message: 'issued', licenseKey: license.licenseKey };
+}
+
+function idFrom(formData: FormData): number | null {
+  const id = Number(formData.get('id'));
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+/** Monthly plans bought outside a subscription system run for one paid month. */
+const MANUAL_PERIOD_DAYS = 31;
+
+/**
+ * Approves an external payment: issues the license on the request's claim token,
+ * so the buyer's status page shows the key, and emails it when email is set up.
+ */
+export async function approvePaymentAction(formData: FormData): Promise<void> {
+  if (!(await isAdmin())) return;
+  const id = idFrom(formData);
+  const store = getStore();
+  const request = id ? await store.getPaymentRequest(id) : null;
+
+  if (request && request.status === 'pending' && licenseSecret()) {
+    const periodEnd =
+      request.product === 'lifetime' ? null : new Date(Date.now() + MANUAL_PERIOD_DAYS * 86_400_000).toISOString();
+    const { license } = await grantLicense({
+      provider: 'manual',
+      product: request.product,
+      email: request.email,
+      customerRef: null,
+      subscriptionRef: null,
+      status: 'active',
+      periodEnd,
+      claimToken: request.claimToken,
+      fallbackRef: request.claimToken,
+      locale: request.locale,
+      note: `paid as: ${request.reference}`.slice(0, 300),
+    });
+    await store.decidePaymentRequest(request.id, 'approved', license.id);
+  }
+  redirect(`/${localeFrom(formData)}/admin#payments`);
+}
+
+export async function rejectPaymentAction(formData: FormData): Promise<void> {
+  if (!(await isAdmin())) return;
+  const id = idFrom(formData);
+  const store = getStore();
+  const request = id ? await store.getPaymentRequest(id) : null;
+  if (request && (await store.decidePaymentRequest(request.id, 'rejected', null))) {
+    await sendRejectionEmail({ to: request.email, locale: request.locale });
+  }
+  redirect(`/${localeFrom(formData)}/admin#payments`);
+}
+
+/** Records one more paid month (e.g. the buyer's Boosty subscription renewed). */
+export async function extendLicenseAction(formData: FormData): Promise<void> {
+  if (!(await isAdmin())) return;
+  const id = idFrom(formData);
+  if (id) await getStore().extendLicense(id, MANUAL_PERIOD_DAYS);
+  redirect(`/${localeFrom(formData)}/admin#licenses`);
+}
+
+const EraseSchema = z.object({ email: z.string().trim().toLowerCase().email().max(200) });
+
+/** Handles a data-deletion request received by email or through the contact form. */
+export async function eraseDataAction(_previous: ActionState, formData: FormData): Promise<ActionState> {
+  if (!(await isAdmin())) return { ok: false, message: 'unauthorized' };
+  const parsed = EraseSchema.safeParse({ email: formData.get('email') });
+  if (!parsed.success) return { ok: false, message: 'invalid_input' };
+  const result = await getStore().eraseByEmail(parsed.data.email);
+  return {
+    ok: true,
+    message: `leads: ${result.leads}, messages: ${result.contacts}, payment requests: ${result.requests}, licenses anonymised: ${result.licensesAnonymised}`,
+  };
 }
 
 export async function revokeLicenseAction(formData: FormData): Promise<void> {

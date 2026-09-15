@@ -1,8 +1,8 @@
 'use client';
 
-import { Check, Copy, KeyRound, Loader2, LogIn } from 'lucide-react';
+import { Check, Copy, KeyRound, Loader2, LogIn, UserX } from 'lucide-react';
 import { useActionState, useState } from 'react';
-import { issueLicenseAction, loginAction, type ActionState } from './actions';
+import { eraseDataAction, issueLicenseAction, loginAction, type ActionState } from './actions';
 import type { AdminCopy } from './copy';
 
 const INITIAL: ActionState = { ok: false, message: '' };
@@ -21,6 +21,32 @@ export function LoginForm({ locale, copy }: { locale: string; copy: AdminCopy })
         {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}
         {copy.signIn}
       </button>
+    </form>
+  );
+}
+
+export function EraseDataForm({ locale, copy }: { locale: string; copy: AdminCopy }) {
+  const [state, action, pending] = useActionState(eraseDataAction, INITIAL);
+  return (
+    <form action={action} className="card space-y-3 p-6">
+      <input type="hidden" name="locale" value={locale} />
+      <h2 className="flex items-center gap-2 font-semibold">
+        <UserX className="h-4 w-4 text-fail" />
+        {copy.tables.erase}
+      </h2>
+      <p className="text-sm text-muted">{copy.tables.eraseHint}</p>
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <input name="email" type="email" required className="input flex-1" aria-label={copy.issue.email} />
+        <button type="submit" className="btn-ghost" disabled={pending}>
+          {pending && <Loader2 className="h-4 w-4 animate-spin" />}
+          {copy.tables.eraseSubmit}
+        </button>
+      </div>
+      {state.message && (
+        <p className={state.ok ? 'text-sm text-pass' : 'text-sm text-fail'}>
+          {state.ok ? state.message : (copy.errors[state.message] ?? state.message)}
+        </p>
+      )}
     </form>
   );
 }

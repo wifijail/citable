@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { clientIp, hashIp } from '@/lib/access';
+import { ConsentField, consentRecord } from '@/lib/consent';
 import { getStore } from '@/lib/db';
 import { sendContactNotification } from '@/lib/email';
 import { readJson, requestLocale } from '@/lib/http';
@@ -9,11 +10,18 @@ import { consumeQuota } from '@/lib/ratelimit';
 export const runtime = 'nodejs';
 
 const BodySchema = z.object({
-  name: z.string().trim().min(1).max(120),
+  // Optional: an email address is all we need to reply.
+  name: z
+    .string()
+    .trim()
+    .max(120)
+    .optional()
+    .transform((value) => value || null),
   email: z.string().trim().toLowerCase().email().max(200),
-  topic: z.enum(['sales', 'support', 'billing', 'partnership', 'other']),
+  topic: z.enum(['sales', 'support', 'billing', 'privacy', 'other']),
   message: z.string().trim().min(10).max(5000),
   locale: z.string().max(5).optional(),
+  consent: ConsentField,
   /** Honeypot: humans never see or fill this field. */
   company: z.string().max(0).optional(),
 });
@@ -38,6 +46,7 @@ export async function POST(request: Request): Promise<Response> {
       topic,
       message,
       locale: requestLocale(request, body.data.locale),
+      ...consentRecord(),
     });
   } catch (error) {
     console.error('[contact] could not store message', error);

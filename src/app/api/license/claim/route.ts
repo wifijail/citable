@@ -6,9 +6,13 @@ import { consumeQuota } from '@/lib/ratelimit';
 
 export const runtime = 'nodejs';
 
+const NO_STORE = { 'cache-control': 'no-store' };
+
 /**
- * Polled by the checkout success page until the payment webhook has created the
- * license. The claim token is a 32-character random secret known only to the buyer.
+ * Polled by the status page until a license exists for the claim token:
+ * - hosted checkout: the payment webhook creates it within seconds;
+ * - external payment: the owner approves the request in /admin (hours).
+ * The claim token is a 32-character random secret known only to the buyer.
  */
 export async function GET(request: Request): Promise<Response> {
   if (!consumeQuota(`claim:${hashIp(clientIp(request.headers))}`, 120, 10 * 60 * 1000).allowed) {
@@ -21,16 +25,17 @@ export async function GET(request: Request): Promise<Response> {
   }
 
   const store = getStore();
-  const [license, checkout] = await Promise.all([
+  const [license, checkout, paymentRequest] = await Promise.all([
     store.findLicenseByClaim(token),
     store.getCheckout(token),
+    store.getPaymentRequestByClaim(token),
   ]);
 
   if (!license) {
-    return NextResponse.json(
-      { status: checkout ? 'pending' : 'unknown' },
-      { headers: { 'cache-control': 'no-store' } },
-    );
+    let status = 'unknown';
+    if (paymentRequest) status = paymentRequest.status === 'rejected' ? 'rejected' : 'review';
+    else if (checkout) status = 'pending';
+    return NextResponse.json({ status, product: paymentRequest?.product ?? checkout?.product }, { headers: NO_STORE });
   }
 
   return NextResponse.json(
@@ -39,9 +44,10 @@ export async function GET(request: Request): Promise<Response> {
       licenseKey: license.licenseKey,
       plan: license.plan,
       product: license.product,
+      periodEnd: license.periodEnd,
       // Only claim an email went out when a mail provider is actually configured.
       emailSent: Boolean(license.email) && emailConfigured(),
     },
-    { headers: { 'cache-control': 'no-store' } },
+    { headers: NO_STORE },
   );
 }

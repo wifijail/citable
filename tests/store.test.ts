@@ -14,6 +14,7 @@ if (process.env.TEST_DATABASE_URL) {
   stores.push(['postgres', () => new PostgresStore(process.env.TEST_DATABASE_URL as string)]);
 }
 
+const CONSENT = { consentAt: new Date().toISOString(), consentVersion: 'test' };
 const unique = () => Math.random().toString(36).slice(2, 10);
 
 function license(overrides: Partial<NewLicense> = {}): NewLicense {
@@ -88,15 +89,15 @@ describe.each(stores)('%s store', (_name, create) => {
 
   it('deduplicates leads by email and source', async () => {
     const email = `${unique()}@example.com`;
-    await store.saveLead({ email, source: 'report', scannedUrl: null, score: null, locale: 'en' });
-    await store.saveLead({ email, source: 'report', scannedUrl: 'https://x.com', score: 40, locale: 'en' });
+    await store.saveLead({ email, source: 'report', scannedUrl: null, score: null, locale: 'en', ...CONSENT });
+    await store.saveLead({ email, source: 'report', scannedUrl: 'https://x.com', score: 40, locale: 'en', ...CONSENT });
     const leads = (await store.listLeads(500)).filter((lead) => lead.email === email);
     expect(leads).toHaveLength(1);
   });
 
   it('saves contact messages', async () => {
     const email = `${unique()}@example.com`;
-    await store.saveContact({ name: 'Ann', email, topic: 'sales', message: 'Hello', locale: 'de' });
+    await store.saveContact({ name: 'Ann', email, topic: 'sales', message: 'Hello', locale: 'de', ...CONSENT });
     const found = (await store.listContacts(500)).find((contact) => contact.email === email);
     expect(found?.message).toBe('Hello');
   });
@@ -145,11 +146,92 @@ describe.each(stores)('%s store', (_name, create) => {
     expect((await store.findLicenseByKey(lifetime.license.licenseKey))?.status).toBe('active');
   });
 
+  it('stores a contact message without a name', async () => {
+    const email = `${unique()}@example.com`;
+    await store.saveContact({ name: null, email, topic: 'support', message: 'No name given', locale: 'kk', ...CONSENT });
+    const found = (await store.listContacts(500)).find((contact) => contact.email === email);
+    expect(found?.name).toBeNull();
+    expect(found?.consentVersion).toBe('test');
+  });
+
+  it('runs the manual payment request lifecycle', async () => {
+    const claimToken = unique();
+    const request = await store.createPaymentRequest({
+      claimToken,
+      product: 'pro',
+      email: `${unique()}@example.com`,
+      reference: 'boosty: user123',
+      message: null,
+      locale: 'ru',
+      ...CONSENT,
+    });
+    expect(request.status).toBe('pending');
+    expect((await store.getPaymentRequestByClaim(claimToken))?.id).toBe(request.id);
+    expect((await store.listPaymentRequests(500)).some((r) => r.id === request.id)).toBe(true);
+
+    const { license: issued } = await store.upsertLicense(license({ claimToken, provider: 'manual', idempotencyKey: `claim:${claimToken}` }));
+    expect(await store.decidePaymentRequest(request.id, 'approved', issued.id)).toBe(true);
+    // A request can only be decided once.
+    expect(await store.decidePaymentRequest(request.id, 'rejected', null)).toBe(false);
+    const decided = await store.getPaymentRequest(request.id);
+    expect(decided?.status).toBe('approved');
+    expect(decided?.licenseId).toBe(issued.id);
+    expect(decided?.decidedAt).not.toBeNull();
+  });
+
+  it('extends a license from the later of now and its current end', async () => {
+    const past = new Date(Date.now() - 10 * 86_400_000).toISOString();
+    const { license: created } = await store.upsertLicense(license({ periodEnd: past, status: 'expired' }));
+    expect(await store.extendLicense(created.id, 31)).toBe(true);
+    const extended = await store.findLicenseByKey(created.licenseKey);
+    const days = (new Date(extended?.periodEnd ?? 0).getTime() - Date.now()) / 86_400_000;
+    expect(days).toBeGreaterThan(30);
+    expect(days).toBeLessThan(32);
+    expect(extended && licenseHasAccess(extended)).toBe(true);
+  });
+
+  it('purges data past its retention period', async () => {
+    const id = unique();
+    await store.saveScan({
+      id,
+      url: 'https://old.example/',
+      finalUrl: 'https://old.example/',
+      score: 1,
+      grade: 'F',
+      plan: 'free',
+      locale: 'en',
+      ipHash: `ip-${id}`,
+      report: {} as AuditReport,
+    });
+    // Pretend three days have passed: the IP hash must go, the scan must stay.
+    const soon = await store.purgeExpired(new Date(Date.now() + 3 * 86_400_000));
+    expect(soon.ipHashesCleared).toBeGreaterThan(0);
+    expect(await store.getScan(id)).not.toBeNull();
+    expect(await store.countFreeScansSince(`ip-${id}`, new Date(0))).toBe(0);
+
+    const later = await store.purgeExpired(new Date(Date.now() + 400 * 86_400_000));
+    expect(later.scansDeleted).toBeGreaterThan(0);
+    expect(await store.getScan(id)).toBeNull();
+  });
+
+  it('erases personal data for an email address', async () => {
+    const email = `${unique()}@Example.com`;
+    await store.saveLead({ email: email.toLowerCase(), source: 'report', scannedUrl: null, score: null, locale: 'en', ...CONSENT });
+    await store.saveContact({ name: 'Bob', email: email.toLowerCase(), topic: 'other', message: 'Delete me', locale: 'en', ...CONSENT });
+    const { license: owned } = await store.upsertLicense(license({ email: email.toLowerCase() }));
+
+    const result = await store.eraseByEmail(email);
+    expect(result.leads).toBe(1);
+    expect(result.contacts).toBe(1);
+    expect(result.licensesAnonymised).toBe(1);
+    expect((await store.findLicenseByKey(owned.licenseKey))?.email).toBeNull();
+  });
+
   it('reports admin stats', async () => {
     const stats = await store.stats();
-    expect(stats.scansTotal).toBeGreaterThan(0);
     expect(stats.licensesActive).toBeGreaterThan(0);
     expect(stats.activeByProduct.lifetime).toBeGreaterThan(0);
+    expect(typeof stats.pendingPayments).toBe('number');
   });
 });
 

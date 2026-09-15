@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { getStore, licenseHasAccess, type LicenseRecord } from '@/lib/db';
 import { normalizeLicenseKey, verifyLicense } from '@/lib/license';
-import type { AccessPlan } from '@/lib/plans';
+import { gumroadConfigured, isGumroadKey, verifyGumroadKey } from '@/lib/payments/gumroad';
+import { findPlan, type AccessPlan } from '@/lib/plans';
 import { consumeQuota } from '@/lib/ratelimit';
 
 export interface Access {
@@ -23,6 +24,10 @@ export async function resolveAccess(rawKey: string | null | undefined): Promise<
   if (!rawKey?.trim()) return { plan: 'free', license: null, keyProblem: null };
 
   const key = normalizeLicenseKey(rawKey);
+  if (isGumroadKey(key)) {
+    return gumroadConfigured() ? resolveGumroadAccess(key) : { plan: 'free', license: null, keyProblem: 'invalid' };
+  }
+
   const signed = verifyLicense(key);
   if (!signed) return { plan: 'free', license: null, keyProblem: 'invalid' };
 
@@ -43,6 +48,82 @@ export async function resolveAccess(rawKey: string | null | undefined): Promise<
     console.error('[access] license lookup failed', error);
     return { plan: 'free', license: null, keyProblem: null };
   }
+}
+
+/** How long a Gumroad verdict is trusted before asking Gumroad again. */
+const GUMROAD_RECHECK_MS = 6 * 60 * 60 * 1000;
+const rejectedGumroadKeys = new Map<string, number>();
+const REJECTED_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * Gumroad keys are checked with Gumroad and the verdict is cached in the
+ * licenses table. When Gumroad is unreachable the last known verdict is used, so
+ * paying customers are not locked out by someone else's outage.
+ */
+async function resolveGumroadAccess(key: string): Promise<Access> {
+  const rejectedAt = rejectedGumroadKeys.get(key);
+  if (rejectedAt && Date.now() - rejectedAt < REJECTED_TTL_MS) {
+    return { plan: 'free', license: null, keyProblem: 'invalid' };
+  }
+
+  const store = getStore();
+  let cached: LicenseRecord | null = null;
+  try {
+    cached = await store.findLicenseByKey(key);
+  } catch (error) {
+    console.error('[access] gumroad cache lookup failed', error);
+  }
+
+  const fresh = cached && Date.now() - new Date(cached.updatedAt).getTime() < GUMROAD_RECHECK_MS;
+  if (!cached || !fresh) {
+    const verdict = await verifyGumroadKey(key);
+
+    if (verdict.kind === 'invalid') {
+      rejectedGumroadKeys.set(key, Date.now());
+      if (rejectedGumroadKeys.size > 5000) rejectedGumroadKeys.clear();
+      if (cached) await store.setLicenseStatusById(cached.id, 'expired').catch(() => undefined);
+      return { plan: 'free', license: null, keyProblem: 'invalid' };
+    }
+
+    if (verdict.kind === 'ok') {
+      const plan = findPlan(verdict.product);
+      if (!plan || plan.grants === 'free') return { plan: 'free', license: null, keyProblem: 'invalid' };
+      try {
+        if (cached) {
+          await store.setLicenseStatusById(cached.id, verdict.status);
+          cached = { ...cached, status: verdict.status };
+        } else {
+          cached = (
+            await store.upsertLicense({
+              licenseKey: key,
+              idempotencyKey: `gumroad:${verdict.saleId}`,
+              // Gumroad already knows the buyer; we do not need their email.
+              email: null,
+              plan: plan.grants,
+              product: verdict.product,
+              provider: 'gumroad',
+              customerRef: null,
+              subscriptionRef: verdict.subscriptionId,
+              status: verdict.status,
+              periodEnd: null,
+              claimToken: null,
+              locale: 'en',
+              note: null,
+            })
+          ).license;
+        }
+      } catch (error) {
+        console.error('[access] could not cache gumroad verdict', error);
+        const granted = verdict.status === 'active';
+        return { plan: granted ? plan.grants : 'free', license: null, keyProblem: granted ? null : 'inactive' };
+      }
+    }
+    // verdict 'unreachable': fall through to the cached row, if any.
+  }
+
+  if (!cached) return { plan: 'free', license: null, keyProblem: null };
+  if (!licenseHasAccess(cached)) return { plan: 'free', license: cached, keyProblem: 'inactive' };
+  return { plan: cached.plan, license: cached, keyProblem: null };
 }
 
 /** Best-effort client IP behind Vercel's proxy. */

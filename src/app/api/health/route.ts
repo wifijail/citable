@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { getStore } from '@/lib/db';
 import { emailConfigured } from '@/lib/email';
 import { licenseSecret } from '@/lib/license';
-import { activeProvider } from '@/lib/payments';
+import { paymentMode } from '@/lib/payments';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -27,7 +27,7 @@ export async function GET(): Promise<Response> {
     {
       ok: database !== 'error',
       database,
-      payments: activeProvider() ?? 'not_configured',
+      payments: paymentMode() ?? 'not_configured',
       licensing: licenseSecret() ? 'ok' : 'missing_LICENSE_SECRET',
       email: emailConfigured() ? 'ok' : 'not_configured',
       admin: process.env.ADMIN_PASSWORD?.trim() ? 'ok' : 'missing_ADMIN_PASSWORD',

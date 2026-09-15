@@ -65,18 +65,50 @@ export async function sendLicenseEmail(params: {
   return send(params.to, t.license.subject, html, siteConfig.contact.email || undefined);
 }
 
+export async function sendRejectionEmail(params: { to: string; locale: Locale }): Promise<boolean> {
+  const t = getEmailMessages(params.locale).rejected;
+  const html = layout(`
+    <h1 style="font-size:20px;margin:0 0 12px">${escapeHtml(t.heading)}</h1>
+    <p style="margin:0;line-height:1.6">${escapeHtml(t.body)}</p>`);
+  return send(params.to, t.subject, html, siteConfig.contact.email || undefined);
+}
+
+function ownerAddress(): string | null {
+  return process.env.OWNER_EMAIL?.trim() || siteConfig.contact.email || null;
+}
+
 export async function sendContactNotification(params: {
-  name: string;
+  name: string | null;
   email: string;
   topic: string;
   message: string;
 }): Promise<boolean> {
-  const owner = process.env.OWNER_EMAIL?.trim() || siteConfig.contact.email;
+  const owner = ownerAddress();
   if (!owner) return false;
+  const from = params.name ? `${escapeHtml(params.name)} &lt;${escapeHtml(params.email)}&gt;` : escapeHtml(params.email);
   const html = layout(`
     <h1 style="font-size:18px;margin:0 0 12px">New contact message</h1>
-    <p style="margin:0 0 6px"><b>From:</b> ${escapeHtml(params.name)} &lt;${escapeHtml(params.email)}&gt;</p>
+    <p style="margin:0 0 6px"><b>From:</b> ${from}</p>
     <p style="margin:0 0 16px"><b>Topic:</b> ${escapeHtml(params.topic)}</p>
     <div style="white-space:pre-wrap;line-height:1.6">${escapeHtml(params.message)}</div>`);
-  return send(owner, `[${siteConfig.name}] ${params.topic}: ${params.name}`, html, params.email);
+  return send(owner, `[${siteConfig.name}] ${params.topic}: ${params.name ?? params.email}`, html, params.email);
+}
+
+/** Tells the owner a buyer reports a payment on the external platform. */
+export async function sendPaymentRequestNotification(params: {
+  product: string;
+  email: string;
+  reference: string;
+  message: string | null;
+}): Promise<boolean> {
+  const owner = ownerAddress();
+  if (!owner) return false;
+  const html = layout(`
+    <h1 style="font-size:18px;margin:0 0 12px">New payment to confirm</h1>
+    <p style="margin:0 0 6px"><b>Plan:</b> ${escapeHtml(params.product)}</p>
+    <p style="margin:0 0 6px"><b>Email:</b> ${escapeHtml(params.email)}</p>
+    <p style="margin:0 0 16px"><b>Paid as:</b> ${escapeHtml(params.reference)}</p>
+    ${params.message ? `<div style="white-space:pre-wrap;line-height:1.6">${escapeHtml(params.message)}</div>` : ''}
+    <p style="margin:24px 0 0"><a href="${siteUrl()}/ru/admin#payments" style="color:#6c47ff">Open the admin panel</a></p>`);
+  return send(owner, `[${siteConfig.name}] Payment to confirm: ${params.product}`, html, params.email);
 }

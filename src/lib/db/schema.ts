@@ -1,7 +1,8 @@
 /**
  * Database schema. Every statement is idempotent (`if not exists`), and the app
  * runs them automatically on its first query, so a fresh Neon/Supabase database
- * needs no manual setup. You can also paste them into the provider's SQL editor.
+ * needs no manual setup. Later additions are appended as `alter table … add column
+ * if not exists`, so existing databases upgrade in place.
  */
 export const SCHEMA_STATEMENTS: readonly string[] = [
   `create table if not exists scans (
@@ -32,7 +33,7 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
 
   `create table if not exists contact_messages (
     id bigserial primary key,
-    name text not null,
+    name text,
     email text not null,
     topic text not null,
     message text not null,
@@ -70,4 +71,28 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
   `create index if not exists licenses_claim_idx on licenses (claim_token)`,
   `create index if not exists licenses_subscription_idx on licenses (provider, subscription_ref)`,
   `create index if not exists licenses_customer_idx on licenses (provider, customer_ref)`,
+
+  `create table if not exists payment_requests (
+    id bigserial primary key,
+    claim_token text not null unique,
+    product text not null,
+    email text not null,
+    reference text not null,
+    message text,
+    locale text not null,
+    status text not null default 'pending',
+    license_id bigint,
+    consent_at timestamptz not null,
+    consent_version text not null,
+    created_at timestamptz not null default now(),
+    decided_at timestamptz
+  )`,
+  `create index if not exists payment_requests_status_idx on payment_requests (status, created_at desc)`,
+
+  // 2026-09: consent records and optional contact name.
+  `alter table leads add column if not exists consent_at timestamptz`,
+  `alter table leads add column if not exists consent_version text`,
+  `alter table contact_messages add column if not exists consent_at timestamptz`,
+  `alter table contact_messages add column if not exists consent_version text`,
+  `alter table contact_messages alter column name drop not null`,
 ];
